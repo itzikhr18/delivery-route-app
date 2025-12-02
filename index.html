@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="מסלול משלוחים">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="description" content="אפליקציית אופטימיזציה למסלולי משלוחים">
+    
+    <title>מסלול משלוחים</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Apple Touch Icons -->
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <!-- Google Fonts - Heebo -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary: #4361ee;
+            --primary-dark: #3651d4;
+            --secondary: #7209b7;
+            --success: #06d6a0;
+            --success-dark: #05b588;
+            --warning: #ffd166;
+            --danger: #ef476f;
+            --danger-dark: #dc3545;
+            --waze: #33ccff;
+            --waze-dark: #00b8f0;
+            --dark: #1a1a2e;
+            --dark-light: #16213e;
+            --gray-100: #f8f9fa;
+            --gray-200: #e9ecef;
+            --gray-300: #dee2e6;
+            --gray-400: #ced4da;
+            --gray-500: #adb5bd;
+            --gray-600: #6c757d;
+            --gray-700: #495057;
+            --gray-800: #343a40;
+            --white: #ffffff;
+            --shadow-sm: 0 2px 4px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.15);
+            --shadow-xl: 0 12px 48px rgba(0,0,0,0.2);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 24px;
+            --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Heebo', sans-serif;
+            background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+            min-height: 100vh;
+            color: var(--gray-800);
+            overflow-x: hidden;
+        }
+
+        /* App Container */
+        .app-container {
+            max-width: 480px;
+            margin: 0 auto;
+            min-height: 100vh;
+            background: var(--gray-100);
+            position: relative;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            padding: 20px;
+            padding-top: env(safe-area-inset-top, 20px);
+            color: var(--white);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            text-align: center;
+            margin-bottom: 8px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header-nav {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .nav-btn {
+            background: rgba(255,255,255,0.2);
+            border: none;
+            padding: 8px 16px;
+            border-radius: var(--radius-md);
+            color: var(--white);
+            font-family: inherit;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            backdrop-filter: blur(10px);
+        }
+
+        .nav-btn:hover, .nav-btn.active {
+            background: rgba(255,255,255,0.35);
+            transform: translateY(-2px);
+        }
+
+        .nav-btn.active {
+            background: var(--white);
+            color: var(--primary);
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 20px;
+            padding-bottom: 100px;
+        }
+
+        /* Screen Management */
+        .screen {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Cards */
+        .card {
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow-md);
+            transition: var(--transition);
+        }
+
+        .card:hover {
+            box-shadow: var(--shadow-lg);
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--gray-700);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card-title .icon {
+            font-size: 1.25rem;
+        }
+
+        /* Form Elements */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--gray-600);
+            margin-bottom: 6px;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid var(--gray-200);
+            border-radius: var(--radius-md);
+            font-family: inherit;
+            font-size: 1rem;
+            transition: var(--transition);
+            background: var(--white);
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(67, 97, 238, 0.15);
+        }
+
+        .form-input::placeholder {
+            color: var(--gray-400);
+        }
+
+        /* Address Card */
+        .address-card {
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--shadow-sm);
+            border-right: 4px solid var(--primary);
+            position: relative;
+            transition: var(--transition);
+        }
+
+        .address-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateX(-4px);
+        }
+
+        .address-card .address-number {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 28px;
+            height: 28px;
+            background: var(--primary);
+            color: var(--white);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.875rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-md);
+        }
+
+        .address-card .delete-btn {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 32px;
+            height: 32px;
+            background: var(--danger);
+            color: var(--white);
+            border: none;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: var(--transition);
+        }
+
+        .address-card .delete-btn:hover {
+            background: var(--danger-dark);
+            transform: scale(1.1);
+        }
+
+        .address-fields {
+            display: grid;
+            gap: 12px;
+        }
+
+        .address-fields .form-input {
+            padding: 12px 14px;
+            font-size: 0.9375rem;
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 14px 24px;
+            border: none;
+            border-radius: var(--radius-md);
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            text-decoration: none;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: var(--white);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .btn-primary:active {
+            transform: translateY(0);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: var(--white);
+        }
+
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: var(--white);
+        }
+
+        .btn-danger:hover {
+            background: var(--danger-dark);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 2px solid var(--gray-300);
+            color: var(--gray-600);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(67, 97, 238, 0.05);
+        }
+
+        .btn-waze {
+            background: var(--waze);
+            color: var(--dark);
+        }
+
+        .btn-waze:hover {
+            background: var(--waze-dark);
+        }
+
+        .btn-phone {
+            background: var(--success);
+            color: var(--white);
+        }
+
+        .btn-block {
+            width: 100%;
+        }
+
+        .btn-lg {
+            padding: 18px 32px;
+            font-size: 1.125rem;
+        }
+
+        .btn-sm {
+            padding: 10px 16px;
+            font-size: 0.875rem;
+        }
+
+        .btn-icon {
+            width: 44px;
+            height: 44px;
+            padding: 0;
+            border-radius: 50%;
+        }
+
+        /* Add Address Button */
+        .add-address-btn {
+            width: 100%;
+            padding: 16px;
+            border: 2px dashed var(--gray-300);
+            border-radius: var(--radius-lg);
+            background: transparent;
+            color: var(--gray-500);
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .add-address-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+            background: rgba(67, 97, 238, 0.05);
+        }
+
+        /* Action Buttons Container */
+        .action-buttons {
+            display: grid;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .action-buttons .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* Route Screen */
+        .route-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--white);
+            border-radius: var(--radius-md);
+            padding: 16px 12px;
+            text-align: center;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+            display: block;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+
+        /* Map Container */
+        .map-container {
+            height: 300px;
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-md);
+        }
+
+        #map {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Route Address Card */
+        .route-address-card {
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--shadow-sm);
+            border-right: 4px solid var(--primary);
+            position: relative;
+        }
+
+        .route-address-card.completed {
+            opacity: 0.5;
+            border-right-color: var(--success);
+        }
+
+        .route-address-header {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .route-number {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            color: var(--white);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .route-address-info {
+            flex: 1;
+        }
+
+        .route-address-text {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--gray-800);
+            margin-bottom: 4px;
+        }
+
+        .route-address-notes {
+            font-size: 0.875rem;
+            color: var(--gray-500);
+            margin-top: 4px;
+        }
+
+        .route-address-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .route-address-actions .btn {
+            flex: 1;
+            min-width: 0;
+        }
+
+        /* Undo Toast */
+        .undo-toast {
+            position: fixed;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--gray-800);
+            color: var(--white);
+            padding: 12px 20px;
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: var(--shadow-xl);
+            z-index: 1000;
+            animation: slideUp 0.3s ease;
+        }
+
+        .undo-toast.hide {
+            animation: slideDown 0.3s ease forwards;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateX(-50%) translateY(100px); opacity: 0; }
+            to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+
+        @keyframes slideDown {
+            from { transform: translateX(-50%) translateY(0); opacity: 1; }
+            to { transform: translateX(-50%) translateY(100px); opacity: 0; }
+        }
+
+        .undo-toast .undo-btn {
+            background: var(--primary);
+            color: var(--white);
+            border: none;
+            padding: 8px 16px;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        /* History Screen */
+        .history-day-card {
+            background: var(--white);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: var(--shadow-sm);
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .history-day-card:hover {
+            box-shadow: var(--shadow-md);
+            transform: translateX(-4px);
+        }
+
+        .history-day-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .history-date {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--gray-800);
+        }
+
+        .history-stats {
+            display: flex;
+            gap: 16px;
+            font-size: 0.875rem;
+            color: var(--gray-500);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 20px;
+            opacity: 0;
+            visibility: hidden;
+            transition: var(--transition);
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal {
+            background: var(--white);
+            border-radius: var(--radius-xl);
+            padding: 24px;
+            max-width: 400px;
+            width: 100%;
+            max-height: 80vh;
+            overflow-y: auto;
+            transform: scale(0.9);
+            transition: var(--transition);
+        }
+
+        .modal-overlay.active .modal {
+            transform: scale(1);
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .modal-text {
+            color: var(--gray-600);
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .modal-actions {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* Alert */
+        .alert {
+            padding: 14px 16px;
+            border-radius: var(--radius-md);
+            margin-bottom: 16px;
+            font-size: 0.9375rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .alert-warning {
+            background: rgba(255, 209, 102, 0.2);
+            border: 1px solid var(--warning);
+            color: var(--gray-700);
+        }
+
+        .alert-error {
+            background: rgba(239, 71, 111, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+        }
+
+        .alert-success {
+            background: rgba(6, 214, 160, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success-dark);
+        }
+
+        /* Loading Spinner */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: var(--transition);
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--gray-200);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 16px;
+            font-size: 1rem;
+            color: var(--gray-600);
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--gray-500);
+        }
+
+        .empty-state-icon {
+            font-size: 4rem;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .empty-state-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--gray-600);
+        }
+
+        /* Print Styles */
+        @media print {
+            body {
+                background: white;
+            }
+            
+            .app-container {
+                max-width: 100%;
+            }
+            
+            .header, .header-nav, .btn, .map-container, .route-address-actions {
+                display: none !important;
+            }
+            
+            .main-content {
+                padding: 0;
+            }
+            
+            .card, .route-address-card {
+                box-shadow: none;
+                border: 1px solid var(--gray-300);
+                break-inside: avoid;
+            }
+            
+            .print-header {
+                display: block !important;
+                text-align: center;
+                margin-bottom: 20px;
+                padding-bottom: 20px;
+                border-bottom: 2px solid var(--gray-300);
+            }
+            
+            .print-header h1 {
+                font-size: 1.5rem;
+                margin-bottom: 8px;
+            }
+            
+            .print-header p {
+                color: var(--gray-600);
+            }
+        }
+
+        .print-header {
+            display: none;
+        }
+
+        /* Route Top Buttons */
+        .route-top-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .route-top-buttons .btn {
+            padding: 10px 8px;
+            font-size: 0.8125rem;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--gray-100);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--gray-300);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--gray-400);
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🚚 מסלול משלוחים</h1>
+            <nav class="header-nav">
+                <button class="nav-btn active" data-screen="input">הזנת כתובות</button>
+                <button class="nav-btn" data-screen="route">מסלול</button>
+                <button class="nav-btn" data-screen="history">היסטוריה</button>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Input Screen -->
+            <section id="input-screen" class="screen active">
+                <!-- Start Address -->
+                <div class="card">
+                    <div class="card-title">
+                        <span class="icon">📍</span>
+                        כתובת התחלה
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <input type="text" id="start-address" class="form-input" placeholder="הזן כתובת התחלה...">
+                    </div>
+                </div>
+
+                <!-- Addresses List -->
+                <div class="card">
+                    <div class="card-title">
+                        <span class="icon">📦</span>
+                        כתובות משלוחים
+                    </div>
+                    
+                    <div id="addresses-container">
+                        <!-- Address cards will be added here -->
+                    </div>
+
+                    <button class="add-address-btn" id="add-address-btn">
+                        <span>+</span>
+                        הוסף כתובת
+                    </button>
+                </div>
+
+                <!-- Alert for duplicate addresses -->
+                <div id="duplicate-alert" class="alert alert-warning" style="display: none;">
+                    ⚠️ כתובת זו כבר קיימת ברשימה
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="action-buttons">
+                    <button class="btn btn-primary btn-lg btn-block" id="calculate-route-btn">
+                        🗺️ חשב מסלול
+                    </button>
+                    <button class="btn btn-outline btn-block" id="clear-all-btn">
+                        🗑️ נקה הכל
+                    </button>
+                </div>
+            </section>
+
+            <!-- Route Screen -->
+            <section id="route-screen" class="screen">
+                <!-- Print Header (visible only in print) -->
+                <div class="print-header">
+                    <h1>מסלול משלוחים</h1>
+                    <p id="print-date"></p>
+                </div>
+
+                <!-- Route Stats -->
+                <div class="route-stats">
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-deliveries">0</span>
+                        <span class="stat-label">משלוחים</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-distance">0</span>
+                        <span class="stat-label">ק"מ</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-value" id="stat-time">0</span>
+                        <span class="stat-label">דקות</span>
+                    </div>
+                </div>
+
+                <!-- Route Top Buttons -->
+                <div class="route-top-buttons">
+                    <button class="btn btn-outline btn-sm" id="print-route-btn">
+                        🖨️ הדפס
+                    </button>
+                    <button class="btn btn-outline btn-sm" id="edit-route-btn">
+                        ✏️ עריכה
+                    </button>
+                    <button class="btn btn-danger btn-sm" id="new-day-btn">
+                        🔄 יום חדש
+                    </button>
+                </div>
+
+                <!-- Map -->
+                <div class="map-container">
+                    <div id="map"></div>
+                </div>
+
+                <!-- Start Address Display -->
+                <div class="card" id="route-start-address" style="border-right-color: var(--success);">
+                    <div class="card-title" style="color: var(--success);">
+                        <span class="icon">🏠</span>
+                        נקודת התחלה
+                    </div>
+                    <p id="route-start-text" style="font-size: 1rem; color: var(--gray-700);"></p>
+                </div>
+
+                <!-- Route Addresses List -->
+                <div id="route-addresses-container">
+                    <!-- Route address cards will be added here -->
+                </div>
+            </section>
+
+            <!-- History Screen -->
+            <section id="history-screen" class="screen">
+                <div class="card">
+                    <div class="card-title">
+                        <span class="icon">📅</span>
+                        היסטוריית משלוחים
+                    </div>
+                </div>
+
+                <div id="history-container">
+                    <!-- History cards will be added here -->
+                </div>
+            </section>
+        </main>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loading-overlay">
+            <div class="spinner"></div>
+            <p class="loading-text">מחשב מסלול אופטימלי...</p>
+        </div>
+
+        <!-- Confirmation Modal -->
+        <div class="modal-overlay" id="confirm-modal">
+            <div class="modal">
+                <h3 class="modal-title" id="modal-title">אישור</h3>
+                <p class="modal-text" id="modal-text">האם אתה בטוח?</p>
+                <div class="modal-actions">
+                    <button class="btn btn-outline" id="modal-cancel">ביטול</button>
+                    <button class="btn btn-primary" id="modal-confirm">אישור</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Detail Modal -->
+        <div class="modal-overlay" id="history-modal">
+            <div class="modal">
+                <h3 class="modal-title" id="history-modal-title">פרטי יום</h3>
+                <div id="history-modal-content">
+                    <!-- History details will be added here -->
+                </div>
+                <div style="margin-top: 20px;">
+                    <button class="btn btn-outline btn-block" id="history-modal-close">סגור</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Undo Toast (hidden by default) -->
+        <div class="undo-toast" id="undo-toast" style="display: none;">
+            <span>משלוח סומן כבוצע</span>
+            <button class="undo-btn" id="undo-btn">בטל</button>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- App JS -->
+    <script src="app.js"></script>
+</body>
+</html>
