@@ -64,7 +64,7 @@
   "shortcuts": [
     {
       "name": "הוסף כתובת",
-      "url": ".?action=add",
+      "url": "/.?action=add",
       "icons": [
         {
           "src": "icons/icon-96.png",
