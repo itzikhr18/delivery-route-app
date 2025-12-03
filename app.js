@@ -1,5 +1,6 @@
 // ============================================
 // מסלול משלוחים - Delivery Route Optimizer
+// גרסה 2.0 - עם Cache והשהייה לתמיכה ב-70+ כתובות
 // ============================================
 
 // State Management
@@ -14,6 +15,61 @@ const state = {
     lastViewedIndex: 0,
     undoTimeout: null,
     lastRemovedAddress: null
+};
+
+// Geocoding Cache - שמירת כתובות שכבר חיפשנו
+const geocodeCache = {
+    data: {},
+    
+    // טעינה מ-LocalStorage
+    load() {
+        const saved = localStorage.getItem('geocodeCache');
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                // נקה רשומות ישנות מעל 30 יום
+                const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+                for (const key in parsed) {
+                    if (parsed[key].timestamp < thirtyDaysAgo) {
+                        delete parsed[key];
+                    }
+                }
+                this.data = parsed;
+                this.save();
+            } catch (e) {
+                this.data = {};
+            }
+        }
+    },
+    
+    // שמירה ל-LocalStorage
+    save() {
+        localStorage.setItem('geocodeCache', JSON.stringify(this.data));
+    },
+    
+    // קבלת כתובת מהמטמון
+    get(address) {
+        const key = this.normalizeAddress(address);
+        if (this.data[key]) {
+            return this.data[key].coords;
+        }
+        return null;
+    },
+    
+    // שמירת כתובת במטמון
+    set(address, coords) {
+        const key = this.normalizeAddress(address);
+        this.data[key] = {
+            coords: coords,
+            timestamp: Date.now()
+        };
+        this.save();
+    },
+    
+    // נרמול כתובת לצורך השוואה
+    normalizeAddress(address) {
+        return address.trim().toLowerCase().replace(/\s+/g, ' ');
+    }
 };
 
 // DOM Elements
@@ -47,6 +103,9 @@ const elements = {
     
     // Modals & Overlays
     loadingOverlay: document.getElementById('loading-overlay'),
+    loadingText: document.getElementById('loading-text'),
+    loadingProgress: document.getElementById('loading-progress'),
+    loadingProgressBar: document.getElementById('loading-progress-bar'),
     confirmModal: document.getElementById('confirm-modal'),
     modalTitle: document.getElementById('modal-title'),
     modalText: document.getElementById('modal-text'),
@@ -97,12 +156,31 @@ function formatDate(date) {
     });
 }
 
-function showLoading(show) {
+function showLoading(show, text = 'מחשב מסלול אופטימלי...', progress = null) {
     if (show) {
         elements.loadingOverlay.classList.add('active');
+        if (elements.loadingText) {
+            elements.loadingText.textContent = text;
+        }
+        if (elements.loadingProgress && elements.loadingProgressBar) {
+            if (progress !== null) {
+                elements.loadingProgress.style.display = 'block';
+                elements.loadingProgressBar.style.width = `${progress}%`;
+            } else {
+                elements.loadingProgress.style.display = 'none';
+            }
+        }
     } else {
         elements.loadingOverlay.classList.remove('active');
     }
+}
+
+function updateLoadingProgress(current, total, cached = 0) {
+    const percent = Math.round((current / total) * 100);
+    const text = cached > 0 
+        ? `ממיר כתובות... ${current}/${total} (${cached} מהמטמון)`
+        : `ממיר כתובות... ${current}/${total}`;
+    showLoading(true, text, percent);
 }
 
 function showConfirmModal(title, text, onConfirm) {
@@ -148,6 +226,11 @@ function showUndoToast(address, callback) {
         elements.undoToast.style.display = 'none';
         if (callback) callback();
     };
+}
+
+// פונקציית השהייה
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 // ============================================
@@ -230,7 +313,16 @@ function saveToHistory(routeData) {
 // Geocoding & Routing Functions
 // ============================================
 
-async function geocodeAddress(address) {
+async function geocodeAddress(address, useCache = true) {
+    // בדוק אם הכתובת במטמון
+    if (useCache) {
+        const cached = geocodeCache.get(address);
+        if (cached) {
+            console.log(`Cache hit: ${address}`);
+            return cached;
+        }
+    }
+    
     // Add "Israel" to improve geocoding accuracy for Israeli addresses
     const searchAddress = address.includes('ישראל') ? address : `${address}, ישראל`;
     
@@ -239,23 +331,75 @@ async function geocodeAddress(address) {
     try {
         const response = await fetch(url, {
             headers: {
-                'Accept-Language': 'he'
+                'Accept-Language': 'he',
+                'User-Agent': 'DeliveryRouteApp/2.0'
             }
         });
         const data = await response.json();
         
         if (data && data.length > 0) {
-            return {
+            const coords = {
                 lat: parseFloat(data[0].lat),
                 lon: parseFloat(data[0].lon),
                 displayName: data[0].display_name
             };
+            
+            // שמור במטמון
+            geocodeCache.set(address, coords);
+            
+            return coords;
         }
         return null;
     } catch (error) {
         console.error('Geocoding error:', error);
         return null;
     }
+}
+
+async function geocodeAddressesWithDelay(addresses, onProgress) {
+    const results = [];
+    let cachedCount = 0;
+    let fetchedCount = 0;
+    
+    for (let i = 0; i < addresses.length; i++) {
+        const addr = addresses[i];
+        
+        // בדוק אם במטמון
+        const cached = geocodeCache.get(addr.address);
+        
+        if (cached) {
+            cachedCount++;
+            results.push({
+                ...addr,
+                coords: cached
+            });
+        } else {
+            // אם זו לא הכתובת הראשונה שאנחנו מביאים מהשרת, חכה שנייה
+            if (fetchedCount > 0) {
+                await delay(1100); // 1.1 שניות להיות בטוחים
+            }
+            
+            const geo = await geocodeAddress(addr.address, false);
+            fetchedCount++;
+            
+            if (geo) {
+                results.push({
+                    ...addr,
+                    coords: geo
+                });
+            } else {
+                // כתובת לא נמצאה
+                return { error: addr.address, results: null };
+            }
+        }
+        
+        // עדכון התקדמות
+        if (onProgress) {
+            onProgress(i + 1, addresses.length, cachedCount);
+        }
+    }
+    
+    return { error: null, results, cachedCount, fetchedCount };
 }
 
 async function calculateOptimalRoute(startCoords, addressCoords) {
@@ -614,32 +758,43 @@ async function handleCalculateRoute() {
         return;
     }
     
-    showLoading(true);
+    showLoading(true, 'בודק כתובת התחלה...');
     
     try {
-        // Geocode start address
-        const startGeo = await geocodeAddress(state.startAddress);
+        // Geocode start address (עם cache)
+        const startCached = geocodeCache.get(state.startAddress);
+        let startGeo;
+        
+        if (startCached) {
+            startGeo = startCached;
+        } else {
+            startGeo = await geocodeAddress(state.startAddress);
+        }
+        
         if (!startGeo) {
             alert(`לא הצלחנו למצוא את הכתובת: ${state.startAddress}. אנא בדוק את הכתובת ונסה שוב.`);
             showLoading(false);
             return;
         }
         
-        // Geocode all addresses
-        const geocodedAddresses = [];
-        for (const addr of validAddresses) {
-            const geo = await geocodeAddress(addr.address);
-            if (geo) {
-                geocodedAddresses.push({
-                    ...addr,
-                    coords: geo
-                });
-            } else {
-                alert(`לא הצלחנו למצוא את הכתובת: ${addr.address}. אנא בדוק את הכתובת ונסה שוב.`);
-                showLoading(false);
-                return;
-            }
+        // Geocode all addresses with delay and progress
+        const geocodeResult = await geocodeAddressesWithDelay(
+            validAddresses,
+            (current, total, cached) => updateLoadingProgress(current, total, cached)
+        );
+        
+        if (geocodeResult.error) {
+            alert(`לא הצלחנו למצוא את הכתובת: ${geocodeResult.error}. אנא בדוק את הכתובת ונסה שוב.`);
+            showLoading(false);
+            return;
         }
+        
+        const geocodedAddresses = geocodeResult.results;
+        
+        // Show stats about caching
+        console.log(`Geocoding complete: ${geocodeResult.cachedCount} from cache, ${geocodeResult.fetchedCount} fetched`);
+        
+        showLoading(true, 'מחשב מסלול אופטימלי...');
         
         // Calculate optimal route
         const coordsForRouting = geocodedAddresses.map(a => a.coords);
@@ -798,6 +953,9 @@ function handleEditRoute() {
 // ============================================
 
 function init() {
+    // Load geocode cache
+    geocodeCache.load();
+    
     // Load saved state
     loadState();
     
@@ -848,6 +1006,9 @@ function init() {
     if (state.addresses.length === 0) {
         handleAddAddress();
     }
+    
+    console.log('מסלול משלוחים v2.0 initialized');
+    console.log(`Cache contains ${Object.keys(geocodeCache.data).length} addresses`);
 }
 
 // Start the app

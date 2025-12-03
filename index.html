@@ -736,6 +736,25 @@
             color: var(--gray-600);
         }
 
+        .loading-progress {
+            width: 80%;
+            max-width: 300px;
+            height: 8px;
+            background: var(--gray-200);
+            border-radius: 4px;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .loading-progress-bar {
+            height: 100%;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+
         /* Empty State */
         .empty-state {
             text-align: center;
@@ -969,7 +988,10 @@
         <!-- Loading Overlay -->
         <div class="loading-overlay" id="loading-overlay">
             <div class="spinner"></div>
-            <p class="loading-text">מחשב מסלול אופטימלי...</p>
+            <p class="loading-text" id="loading-text">מחשב מסלול אופטימלי...</p>
+            <div class="loading-progress" id="loading-progress">
+                <div class="loading-progress-bar" id="loading-progress-bar"></div>
+            </div>
         </div>
 
         <!-- Confirmation Modal -->
