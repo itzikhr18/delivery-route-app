@@ -1,10 +1,10 @@
 // Service Worker for מסלול משלוחים PWA
 const CACHE_NAME = 'delivery-route-v1';
 const urlsToCache = [
-    '/',
-    '/index.html',
-    '/app.js',
-    '/manifest.json',
+    './',
+    'index.html',
+    'app.js',
+    'manifest.json',
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
     'https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap'

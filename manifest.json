@@ -2,7 +2,7 @@
     "name": "מסלול משלוחים",
     "short_name": "משלוחים",
     "description": "אפליקציית אופטימיזציה למסלולי משלוחים",
-    "start_url": "./",
+        "start_url": "./",
     "display": "standalone",
     "background_color": "#1a1a2e",
     "theme_color": "#4361ee",
