@@ -1,6 +1,6 @@
 // ============================================
 // מסלול משלוחים - Delivery Route Optimizer
-// גרסה 2.0 - עם Cache והשהייה לתמיכה ב-70+ כתובות
+// גרסה 3.0 - Bulk Import, Pin Dragging, Smart Splitting
 // ============================================
 
 // State Management
@@ -17,17 +17,58 @@ const state = {
     lastRemovedAddress: null
 };
 
+// ============================================
+// Corrected Locations - תיקוני מיקום ידניים
+// ============================================
+const correctedLocations = {
+    data: {},
+    
+    load() {
+        const saved = localStorage.getItem('correctedLocations');
+        if (saved) {
+            try {
+                this.data = JSON.parse(saved);
+            } catch (e) {
+                this.data = {};
+            }
+        }
+    },
+    
+    save() {
+        localStorage.setItem('correctedLocations', JSON.stringify(this.data));
+    },
+    
+    get(address) {
+        const key = this.normalizeAddress(address);
+        return this.data[key] || null;
+    },
+    
+    set(address, coords) {
+        const key = this.normalizeAddress(address);
+        this.data[key] = {
+            lat: coords.lat,
+            lon: coords.lon,
+            correctedAt: Date.now()
+        };
+        this.save();
+    },
+    
+    normalizeAddress(address) {
+        return address.trim().toLowerCase().replace(/\s+/g, ' ');
+    }
+};
+
+// ============================================
 // Geocoding Cache - שמירת כתובות שכבר חיפשנו
+// ============================================
 const geocodeCache = {
     data: {},
     
-    // טעינה מ-LocalStorage
     load() {
         const saved = localStorage.getItem('geocodeCache');
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                // נקה רשומות ישנות מעל 30 יום
                 const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
                 for (const key in parsed) {
                     if (parsed[key].timestamp < thirtyDaysAgo) {
@@ -42,12 +83,10 @@ const geocodeCache = {
         }
     },
     
-    // שמירה ל-LocalStorage
     save() {
         localStorage.setItem('geocodeCache', JSON.stringify(this.data));
     },
     
-    // קבלת כתובת מהמטמון
     get(address) {
         const key = this.normalizeAddress(address);
         if (this.data[key]) {
@@ -56,7 +95,6 @@ const geocodeCache = {
         return null;
     },
     
-    // שמירת כתובת במטמון
     set(address, coords) {
         const key = this.normalizeAddress(address);
         this.data[key] = {
@@ -66,13 +104,14 @@ const geocodeCache = {
         this.save();
     },
     
-    // נרמול כתובת לצורך השוואה
     normalizeAddress(address) {
         return address.trim().toLowerCase().replace(/\s+/g, ' ');
     }
 };
 
+// ============================================
 // DOM Elements
+// ============================================
 const elements = {
     // Screens
     inputScreen: document.getElementById('input-screen'),
@@ -86,6 +125,7 @@ const elements = {
     calculateRouteBtn: document.getElementById('calculate-route-btn'),
     clearAllBtn: document.getElementById('clear-all-btn'),
     duplicateAlert: document.getElementById('duplicate-alert'),
+    bulkImportBtn: document.getElementById('bulk-import-btn'),
     
     // Route elements
     statDeliveries: document.getElementById('stat-deliveries'),
@@ -116,9 +156,17 @@ const elements = {
     historyModalContent: document.getElementById('history-modal-content'),
     historyModalClose: document.getElementById('history-modal-close'),
     
-    // Toast
+    // Import Modal
+    importModal: document.getElementById('import-modal'),
+    importTextarea: document.getElementById('import-textarea'),
+    importCount: document.getElementById('import-count'),
+    importConfirm: document.getElementById('import-confirm'),
+    importCancel: document.getElementById('import-cancel'),
+    
+    // Toasts
     undoToast: document.getElementById('undo-toast'),
     undoBtn: document.getElementById('undo-btn'),
+    correctionToast: document.getElementById('correction-toast'),
     
     // Navigation
     navBtns: document.querySelectorAll('.nav-btn')
@@ -130,20 +178,13 @@ const elements = {
 
 function formatPhoneNumber(phone) {
     if (!phone) return '';
-    
-    // Remove all non-digit characters
     let cleaned = phone.replace(/\D/g, '');
-    
-    // Handle Israeli numbers
     if (cleaned.startsWith('972')) {
         cleaned = '0' + cleaned.slice(3);
     }
-    
-    // Ensure 10 digits with leading 0
     if (cleaned.length === 9 && !cleaned.startsWith('0')) {
         cleaned = '0' + cleaned;
     }
-    
     return cleaned;
 }
 
@@ -228,7 +269,13 @@ function showUndoToast(address, callback) {
     };
 }
 
-// פונקציית השהייה
+function showCorrectionToast() {
+    elements.correctionToast.style.display = 'flex';
+    setTimeout(() => {
+        elements.correctionToast.style.display = 'none';
+    }, 3000);
+}
+
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -267,7 +314,6 @@ function getHistory() {
     if (history) {
         try {
             let data = JSON.parse(history);
-            // Clean up entries older than 30 days
             const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
             data = data.filter(entry => new Date(entry.date).getTime() > thirtyDaysAgo);
             localStorage.setItem('deliveryRouteHistory', JSON.stringify(data));
@@ -283,7 +329,6 @@ function saveToHistory(routeData) {
     const history = getHistory();
     const today = new Date().toISOString().split('T')[0];
     
-    // Check if today already exists
     const existingIndex = history.findIndex(h => h.date === today);
     
     const historyEntry = {
@@ -314,7 +359,19 @@ function saveToHistory(routeData) {
 // ============================================
 
 async function geocodeAddress(address, useCache = true) {
-    // בדוק אם הכתובת במטמון
+    // 1. קודם בדוק תיקונים ידניים (עדיפות עליונה)
+    const corrected = correctedLocations.get(address);
+    if (corrected) {
+        console.log(`Using corrected location: ${address}`);
+        return {
+            lat: corrected.lat,
+            lon: corrected.lon,
+            displayName: address,
+            isCorrected: true
+        };
+    }
+    
+    // 2. בדוק במטמון
     if (useCache) {
         const cached = geocodeCache.get(address);
         if (cached) {
@@ -323,16 +380,15 @@ async function geocodeAddress(address, useCache = true) {
         }
     }
     
-    // Add "Israel" to improve geocoding accuracy for Israeli addresses
+    // 3. חפש ב-Nominatim
     const searchAddress = address.includes('ישראל') ? address : `${address}, ישראל`;
-    
     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchAddress)}&format=json&limit=1`;
     
     try {
         const response = await fetch(url, {
             headers: {
                 'Accept-Language': 'he',
-                'User-Agent': 'DeliveryRouteApp/2.0'
+                'User-Agent': 'DeliveryRouteApp/3.0'
             }
         });
         const data = await response.json();
@@ -344,9 +400,7 @@ async function geocodeAddress(address, useCache = true) {
                 displayName: data[0].display_name
             };
             
-            // שמור במטמון
             geocodeCache.set(address, coords);
-            
             return coords;
         }
         return null;
@@ -364,53 +418,121 @@ async function geocodeAddressesWithDelay(addresses, onProgress) {
     for (let i = 0; i < addresses.length; i++) {
         const addr = addresses[i];
         
-        // בדוק אם במטמון
-        const cached = geocodeCache.get(addr.address);
-        
-        if (cached) {
-            cachedCount++;
+        // בדוק תיקון ידני
+        const corrected = correctedLocations.get(addr.address);
+        if (corrected) {
             results.push({
                 ...addr,
-                coords: cached
+                coords: { lat: corrected.lat, lon: corrected.lon, displayName: addr.address },
+                isCorrected: true
             });
-        } else {
-            // אם זו לא הכתובת הראשונה שאנחנו מביאים מהשרת, חכה שנייה
-            if (fetchedCount > 0) {
-                await delay(1100); // 1.1 שניות להיות בטוחים
-            }
-            
-            const geo = await geocodeAddress(addr.address, false);
-            fetchedCount++;
-            
-            if (geo) {
-                results.push({
-                    ...addr,
-                    coords: geo
-                });
-            } else {
-                // כתובת לא נמצאה
-                return { error: addr.address, results: null };
-            }
+            cachedCount++;
+            if (onProgress) onProgress(i + 1, addresses.length, cachedCount);
+            continue;
         }
         
-        // עדכון התקדמות
-        if (onProgress) {
-            onProgress(i + 1, addresses.length, cachedCount);
+        // בדוק במטמון
+        const cached = geocodeCache.get(addr.address);
+        if (cached) {
+            cachedCount++;
+            results.push({ ...addr, coords: cached });
+            if (onProgress) onProgress(i + 1, addresses.length, cachedCount);
+            continue;
         }
+        
+        // חפש ב-Nominatim עם השהייה
+        if (fetchedCount > 0) {
+            await delay(1100);
+        }
+        
+        const geo = await geocodeAddress(addr.address, false);
+        fetchedCount++;
+        
+        if (geo) {
+            results.push({ ...addr, coords: geo });
+        } else {
+            return { error: addr.address, results: null };
+        }
+        
+        if (onProgress) onProgress(i + 1, addresses.length, cachedCount);
     }
     
     return { error: null, results, cachedCount, fetchedCount };
 }
 
-async function calculateOptimalRoute(startCoords, addressCoords) {
+// ============================================
+// Smart Splitting - חלוקה אוטומטית לקבוצות
+// ============================================
+
+const BATCH_SIZE = 40; // מקסימום נקודות לכל בקשת OSRM
+
+async function calculateOptimalRouteWithSplitting(startCoords, addressCoords) {
     if (addressCoords.length === 0) return null;
     
-    // Build coordinates string for OSRM
-    // Format: lon,lat;lon,lat;...
+    // אם פחות מ-BATCH_SIZE, חשב רגיל
+    if (addressCoords.length <= BATCH_SIZE) {
+        return await calculateSingleBatchRoute(startCoords, addressCoords);
+    }
+    
+    // חלק לקבוצות
+    console.log(`Splitting ${addressCoords.length} addresses into batches of ${BATCH_SIZE}`);
+    
+    const batches = [];
+    for (let i = 0; i < addressCoords.length; i += BATCH_SIZE) {
+        batches.push(addressCoords.slice(i, i + BATCH_SIZE));
+    }
+    
+    let allOrderedIndices = [];
+    let totalDistance = 0;
+    let totalDuration = 0;
+    let combinedGeometry = { type: 'LineString', coordinates: [] };
+    let currentStartCoords = startCoords;
+    let globalIndexOffset = 0;
+    
+    for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} addresses`);
+        
+        const batchResult = await calculateSingleBatchRoute(currentStartCoords, batch);
+        
+        if (!batchResult) {
+            console.error(`Batch ${batchIndex + 1} failed`);
+            return null;
+        }
+        
+        // מיפוי האינדקסים הגלובליים
+        const globalIndices = batchResult.orderedIndices.map(i => i + globalIndexOffset);
+        allOrderedIndices = allOrderedIndices.concat(globalIndices);
+        
+        totalDistance += batchResult.distance;
+        totalDuration += batchResult.duration;
+        
+        // חיבור הגיאומטריה
+        if (batchResult.geometry && batchResult.geometry.coordinates) {
+            combinedGeometry.coordinates = combinedGeometry.coordinates.concat(batchResult.geometry.coordinates);
+        }
+        
+        // הנקודה האחרונה של הקבוצה הנוכחית = נקודת ההתחלה של הבאה
+        const lastIndex = batchResult.orderedIndices[batchResult.orderedIndices.length - 1];
+        currentStartCoords = batch[lastIndex];
+        
+        globalIndexOffset += batch.length;
+    }
+    
+    return {
+        distance: totalDistance,
+        duration: totalDuration,
+        geometry: combinedGeometry,
+        orderedIndices: allOrderedIndices
+    };
+}
+
+async function calculateSingleBatchRoute(startCoords, addressCoords) {
+    if (addressCoords.length === 0) return null;
+    
     const allCoords = [startCoords, ...addressCoords];
     const coordsString = allCoords.map(c => `${c.lon},${c.lat}`).join(';');
     
-    // Use OSRM trip service for optimal route
     const url = `https://router.project-osrm.org/trip/v1/driving/${coordsString}?source=first&roundtrip=false&geometries=geojson&overview=full`;
     
     try {
@@ -419,12 +541,8 @@ async function calculateOptimalRoute(startCoords, addressCoords) {
         
         if (data.code === 'Ok' && data.trips && data.trips.length > 0) {
             const trip = data.trips[0];
-            
-            // Get the optimal order (waypoint_index tells us the order)
             const waypoints = data.waypoints;
             
-            // Create ordered list based on waypoint indices
-            // Skip the first one (start address)
             const orderedIndices = waypoints
                 .slice(1)
                 .map((wp, originalIndex) => ({
@@ -435,8 +553,8 @@ async function calculateOptimalRoute(startCoords, addressCoords) {
                 .map(item => item.originalIndex);
             
             return {
-                distance: trip.distance / 1000, // Convert to km
-                duration: trip.duration / 60, // Convert to minutes
+                distance: trip.distance / 1000,
+                duration: trip.duration / 60,
                 geometry: trip.geometry,
                 orderedIndices
             };
@@ -475,7 +593,6 @@ function renderAddresses() {
         elements.addressesContainer.appendChild(card);
     });
     
-    // Add event listeners to new inputs
     document.querySelectorAll('.address-card input').forEach(input => {
         input.addEventListener('input', handleAddressInput);
         input.addEventListener('blur', handleAddressBlur);
@@ -492,13 +609,17 @@ function renderRouteAddresses() {
     if (!state.optimizedRoute || !state.optimizedRoute.addresses) return;
     
     state.optimizedRoute.addresses.forEach((address, index) => {
+        const isCorrected = address.isCorrected || correctedLocations.get(address.address);
         const card = document.createElement('div');
-        card.className = `route-address-card ${address.completed ? 'completed' : ''}`;
+        card.className = `route-address-card ${address.completed ? 'completed' : ''} ${isCorrected ? 'corrected' : ''}`;
         card.innerHTML = `
             <div class="route-address-header">
                 <div class="route-number">${index + 1}</div>
                 <div class="route-address-info">
-                    <div class="route-address-text">${address.address}</div>
+                    <div class="route-address-text">
+                        ${isCorrected ? '<span class="corrected-badge">📍 מתוקן</span>' : ''}
+                        ${address.address}
+                    </div>
                     ${address.notes ? `<div class="route-address-notes">📝 ${address.notes}</div>` : ''}
                 </div>
             </div>
@@ -511,7 +632,6 @@ function renderRouteAddresses() {
         elements.routeAddressesContainer.appendChild(card);
     });
     
-    // Add event listeners
     document.querySelectorAll('.navigate-btn').forEach(btn => {
         btn.addEventListener('click', handleNavigate);
     });
@@ -536,7 +656,7 @@ function renderHistory() {
         return;
     }
     
-    history.forEach((day, index) => {
+    history.forEach((day) => {
         const card = document.createElement('div');
         card.className = 'history-day-card';
         card.innerHTML = `
@@ -581,7 +701,7 @@ function showHistoryDetail(day) {
 }
 
 // ============================================
-// Map Functions
+// Map Functions with Draggable Markers
 // ============================================
 
 function initMap() {
@@ -589,7 +709,6 @@ function initMap() {
         state.map.remove();
     }
     
-    // Default center on Beit Shemesh, Israel
     state.map = L.map('map').setView([31.7455, 34.9896], 13);
     
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -607,7 +726,7 @@ function updateMap() {
         state.routeLine.remove();
     }
     
-    // Add start marker
+    // Add start marker (not draggable)
     if (state.optimizedRoute.startCoords) {
         const startMarker = L.marker([state.optimizedRoute.startCoords.lat, state.optimizedRoute.startCoords.lon], {
             icon: L.divIcon({
@@ -620,24 +739,36 @@ function updateMap() {
         state.markers.push(startMarker);
     }
     
-    // Add address markers
+    // Add address markers (draggable!)
     state.optimizedRoute.addresses.forEach((addr, index) => {
         if (addr.coords) {
+            const isCorrected = addr.isCorrected || correctedLocations.get(addr.address);
+            const markerColor = isCorrected ? 'var(--warning)' : 'linear-gradient(135deg, var(--primary), var(--secondary))';
+            
             const marker = L.marker([addr.coords.lat, addr.coords.lon], {
+                draggable: true, // ניתן לגרירה!
                 icon: L.divIcon({
-                    className: 'custom-marker',
-                    html: `<div style="background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">${index + 1}</div>`,
+                    className: 'custom-marker leaflet-marker-draggable',
+                    html: `<div style="background: ${markerColor}; color: ${isCorrected ? 'var(--gray-800)' : 'white'}; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); cursor: move;">${index + 1}</div>`,
                     iconSize: [32, 32],
                     iconAnchor: [16, 16]
                 })
             }).addTo(state.map);
-            marker.bindPopup(`<strong>${index + 1}. ${addr.address}</strong>`);
+            
+            marker.bindPopup(`<strong>${index + 1}. ${addr.address}</strong><br><small>גרור לתיקון מיקום</small>`);
+            
+            // Event: סיום גרירה
+            marker.on('dragend', function(e) {
+                const newLatLng = e.target.getLatLng();
+                handleMarkerDragEnd(addr.address, newLatLng, index);
+            });
+            
             state.markers.push(marker);
         }
     });
     
     // Draw route line
-    if (state.optimizedRoute.geometry) {
+    if (state.optimizedRoute.geometry && state.optimizedRoute.geometry.coordinates) {
         const coords = state.optimizedRoute.geometry.coordinates.map(c => [c[1], c[0]]);
         state.routeLine = L.polyline(coords, {
             color: '#4361ee',
@@ -645,9 +776,93 @@ function updateMap() {
             opacity: 0.8
         }).addTo(state.map);
         
-        // Fit map to route
         state.map.fitBounds(state.routeLine.getBounds(), { padding: [30, 30] });
     }
+}
+
+function handleMarkerDragEnd(address, newLatLng, index) {
+    // שמור את התיקון
+    correctedLocations.set(address, {
+        lat: newLatLng.lat,
+        lon: newLatLng.lng
+    });
+    
+    // עדכן את המצב
+    if (state.optimizedRoute && state.optimizedRoute.addresses[index]) {
+        state.optimizedRoute.addresses[index].coords = {
+            lat: newLatLng.lat,
+            lon: newLatLng.lng
+        };
+        state.optimizedRoute.addresses[index].isCorrected = true;
+    }
+    
+    // גם עדכן את הcache
+    geocodeCache.set(address, {
+        lat: newLatLng.lat,
+        lon: newLatLng.lng,
+        displayName: address
+    });
+    
+    saveState();
+    showCorrectionToast();
+    renderRouteAddresses();
+    
+    console.log(`Location corrected: ${address} -> ${newLatLng.lat}, ${newLatLng.lng}`);
+}
+
+// ============================================
+// Bulk Import Functions
+// ============================================
+
+function showImportModal() {
+    elements.importModal.classList.add('active');
+    elements.importTextarea.value = '';
+    elements.importCount.textContent = '0 כתובות';
+    elements.importTextarea.focus();
+}
+
+function hideImportModal() {
+    elements.importModal.classList.remove('active');
+}
+
+function updateImportCount() {
+    const text = elements.importTextarea.value;
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    elements.importCount.textContent = `${lines.length} כתובות`;
+}
+
+function handleBulkImport() {
+    const text = elements.importTextarea.value;
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    
+    if (lines.length === 0) {
+        alert('לא הוזנו כתובות');
+        return;
+    }
+    
+    // הוסף את הכתובות החדשות
+    lines.forEach(line => {
+        const address = line.trim();
+        // בדוק שהכתובת לא כבר קיימת
+        const exists = state.addresses.some(a => 
+            a.address.trim().toLowerCase() === address.toLowerCase()
+        );
+        
+        if (!exists && address.length > 0) {
+            state.addresses.push({
+                address: address,
+                phone: '',
+                notes: ''
+            });
+        }
+    });
+    
+    renderAddresses();
+    saveState();
+    hideImportModal();
+    
+    // הודעה למשתמש
+    alert(`יובאו ${lines.length} כתובות בהצלחה!`);
 }
 
 // ============================================
@@ -658,11 +873,9 @@ function handleNavigation(e) {
     const screenName = e.target.dataset.screen;
     if (!screenName) return;
     
-    // Update nav buttons
     elements.navBtns.forEach(btn => btn.classList.remove('active'));
     e.target.classList.add('active');
     
-    // Update screens
     document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
     
     if (screenName === 'input') {
@@ -672,7 +885,7 @@ function handleNavigation(e) {
         if (!state.map) {
             setTimeout(initMap, 100);
         }
-        updateMap();
+        setTimeout(updateMap, 150);
     } else if (screenName === 'history') {
         elements.historyScreen.classList.add('active');
         renderHistory();
@@ -690,7 +903,6 @@ function handleAddAddress() {
     renderAddresses();
     saveState();
     
-    // Focus on the new address input
     const lastInput = elements.addressesContainer.querySelector('.address-card:last-child .address-input');
     if (lastInput) {
         lastInput.focus();
@@ -717,14 +929,12 @@ function handleAddressBlur(e) {
     const index = parseInt(e.target.dataset.index);
     const field = e.target.dataset.field;
     
-    // Format phone number on blur
     if (field === 'phone' && state.addresses[index]) {
         const formatted = formatPhoneNumber(state.addresses[index].phone);
         state.addresses[index].phone = formatted;
         e.target.value = formatted;
     }
     
-    // Check for duplicates
     if (field === 'address' && state.addresses[index]) {
         const currentAddress = state.addresses[index].address.trim().toLowerCase();
         if (currentAddress) {
@@ -746,7 +956,6 @@ function handleStartAddressChange() {
 }
 
 async function handleCalculateRoute() {
-    // Validate
     if (!state.startAddress.trim()) {
         alert('נא להזין כתובת התחלה');
         return;
@@ -761,12 +970,10 @@ async function handleCalculateRoute() {
     showLoading(true, 'בודק כתובת התחלה...');
     
     try {
-        // Geocode start address (עם cache)
-        const startCached = geocodeCache.get(state.startAddress);
-        let startGeo;
-        
-        if (startCached) {
-            startGeo = startCached;
+        // Geocode start address
+        let startGeo = correctedLocations.get(state.startAddress);
+        if (startGeo) {
+            startGeo = { lat: startGeo.lat, lon: startGeo.lon };
         } else {
             startGeo = await geocodeAddress(state.startAddress);
         }
@@ -777,7 +984,7 @@ async function handleCalculateRoute() {
             return;
         }
         
-        // Geocode all addresses with delay and progress
+        // Geocode all addresses
         const geocodeResult = await geocodeAddressesWithDelay(
             validAddresses,
             (current, total, cached) => updateLoadingProgress(current, total, cached)
@@ -790,15 +997,13 @@ async function handleCalculateRoute() {
         }
         
         const geocodedAddresses = geocodeResult.results;
-        
-        // Show stats about caching
         console.log(`Geocoding complete: ${geocodeResult.cachedCount} from cache, ${geocodeResult.fetchedCount} fetched`);
         
         showLoading(true, 'מחשב מסלול אופטימלי...');
         
-        // Calculate optimal route
+        // Calculate optimal route with smart splitting
         const coordsForRouting = geocodedAddresses.map(a => a.coords);
-        const routeResult = await calculateOptimalRoute(startGeo, coordsForRouting);
+        const routeResult = await calculateOptimalRouteWithSplitting(startGeo, coordsForRouting);
         
         if (!routeResult) {
             alert('שגיאה בחישוב המסלול. אנא נסה שוב.');
@@ -806,10 +1011,9 @@ async function handleCalculateRoute() {
             return;
         }
         
-        // Reorder addresses according to optimal route
+        // Reorder addresses
         const orderedAddresses = routeResult.orderedIndices.map(i => geocodedAddresses[i]);
         
-        // Save optimized route
         state.optimizedRoute = {
             startAddress: state.startAddress,
             startCoords: startGeo,
@@ -838,11 +1042,8 @@ async function handleCalculateRoute() {
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
         elements.routeScreen.classList.add('active');
         
-        // Init map if needed
         setTimeout(() => {
-            if (!state.map) {
-                initMap();
-            }
+            if (!state.map) initMap();
             updateMap();
         }, 100);
         
@@ -856,19 +1057,8 @@ async function handleCalculateRoute() {
 
 function handleNavigate(e) {
     const address = decodeURIComponent(e.target.dataset.address);
-    
-    // Try Waze first
     const wazeUrl = `waze://?q=${encodeURIComponent(address)}`;
-    const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
-    
-    // On iOS, try waze:// scheme, fallback to Google Maps
     window.location.href = wazeUrl;
-    
-    // Fallback after short delay if Waze doesn't open
-    setTimeout(() => {
-        // This will only work if Waze didn't open
-        // (user will have already navigated away if Waze opened)
-    }, 100);
 }
 
 function handleCompleteDelivery(e) {
@@ -881,16 +1071,13 @@ function handleCompleteDelivery(e) {
             const removedAddress = state.optimizedRoute.addresses[index];
             state.optimizedRoute.addresses.splice(index, 1);
             
-            // Update stats
             elements.statDeliveries.textContent = state.optimizedRoute.addresses.length;
             
             renderRouteAddresses();
             updateMap();
             saveState();
             
-            // Show undo option
             showUndoToast(removedAddress, () => {
-                // Undo - add address back
                 state.optimizedRoute.addresses.splice(index, 0, removedAddress);
                 elements.statDeliveries.textContent = state.optimizedRoute.addresses.length;
                 renderRouteAddresses();
@@ -927,7 +1114,6 @@ function handleNewDay() {
             renderAddresses();
             saveState();
             
-            // Switch to input screen
             elements.navBtns.forEach(btn => btn.classList.remove('active'));
             document.querySelector('[data-screen="input"]').classList.add('active');
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -941,7 +1127,6 @@ function handlePrintRoute() {
 }
 
 function handleEditRoute() {
-    // Switch to input screen
     elements.navBtns.forEach(btn => btn.classList.remove('active'));
     document.querySelector('[data-screen="input"]').classList.add('active');
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -953,10 +1138,9 @@ function handleEditRoute() {
 // ============================================
 
 function init() {
-    // Load geocode cache
+    // Load data
+    correctedLocations.load();
     geocodeCache.load();
-    
-    // Load saved state
     loadState();
     
     // Render initial UI
@@ -989,11 +1173,15 @@ function init() {
         elements.historyModal.classList.remove('active');
     });
     
+    // Import modal events
+    elements.bulkImportBtn.addEventListener('click', showImportModal);
+    elements.importCancel.addEventListener('click', hideImportModal);
+    elements.importConfirm.addEventListener('click', handleBulkImport);
+    elements.importTextarea.addEventListener('input', updateImportCount);
+    
     // Close modals on overlay click
     elements.confirmModal.addEventListener('click', (e) => {
-        if (e.target === elements.confirmModal) {
-            hideConfirmModal();
-        }
+        if (e.target === elements.confirmModal) hideConfirmModal();
     });
     
     elements.historyModal.addEventListener('click', (e) => {
@@ -1002,27 +1190,28 @@ function init() {
         }
     });
     
+    elements.importModal.addEventListener('click', (e) => {
+        if (e.target === elements.importModal) hideImportModal();
+    });
+    
     // Add first address if none exist
     if (state.addresses.length === 0) {
         handleAddAddress();
     }
     
-    console.log('מסלול משלוחים v2.0 initialized');
-    console.log(`Cache contains ${Object.keys(geocodeCache.data).length} addresses`);
+    console.log('מסלול משלוחים v3.0 initialized');
+    console.log(`Cache: ${Object.keys(geocodeCache.data).length} addresses`);
+    console.log(`Corrections: ${Object.keys(correctedLocations.data).length} locations`);
 }
 
 // Start the app
 document.addEventListener('DOMContentLoaded', init);
 
-// Register Service Worker for PWA
+// Register Service Worker
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('sw.js')
-            .then(registration => {
-                console.log('ServiceWorker registration successful');
-            })
-            .catch(err => {
-                console.log('ServiceWorker registration failed: ', err);
-            });
+            .then(registration => console.log('ServiceWorker registered'))
+            .catch(err => console.log('ServiceWorker failed:', err));
     });
 }

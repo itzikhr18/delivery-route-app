@@ -216,6 +216,26 @@
             color: var(--gray-400);
         }
 
+        /* Textarea */
+        .form-textarea {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid var(--gray-200);
+            border-radius: var(--radius-md);
+            font-family: inherit;
+            font-size: 1rem;
+            transition: var(--transition);
+            background: var(--white);
+            resize: vertical;
+            min-height: 200px;
+        }
+
+        .form-textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(67, 97, 238, 0.15);
+        }
+
         /* Address Card */
         .address-card {
             background: var(--white);
@@ -406,6 +426,31 @@
             background: rgba(67, 97, 238, 0.05);
         }
 
+        /* Import Button */
+        .import-btn {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 12px;
+            border: 2px solid var(--secondary);
+            border-radius: var(--radius-lg);
+            background: rgba(114, 9, 183, 0.1);
+            color: var(--secondary);
+            font-family: inherit;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .import-btn:hover {
+            background: var(--secondary);
+            color: var(--white);
+        }
+
         /* Action Buttons Container */
         .action-buttons {
             display: grid;
@@ -455,11 +500,27 @@
             overflow: hidden;
             margin-bottom: 20px;
             box-shadow: var(--shadow-md);
+            position: relative;
         }
 
         #map {
             width: 100%;
             height: 100%;
+        }
+
+        /* Map Drag Hint */
+        .map-drag-hint {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            z-index: 1000;
+            pointer-events: none;
         }
 
         /* Route Address Card */
@@ -476,6 +537,10 @@
         .route-address-card.completed {
             opacity: 0.5;
             border-right-color: var(--success);
+        }
+
+        .route-address-card.corrected {
+            border-right-color: var(--warning);
         }
 
         .route-address-header {
@@ -514,6 +579,16 @@
             font-size: 0.875rem;
             color: var(--gray-500);
             margin-top: 4px;
+        }
+
+        .corrected-badge {
+            display: inline-block;
+            background: var(--warning);
+            color: var(--gray-800);
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            margin-right: 8px;
         }
 
         .route-address-actions {
@@ -662,6 +737,39 @@
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 12px;
+        }
+
+        /* Import Modal - Larger */
+        .modal-large {
+            max-width: 500px;
+        }
+
+        .import-help {
+            background: var(--gray-100);
+            padding: 12px;
+            border-radius: var(--radius-md);
+            margin-bottom: 16px;
+            font-size: 0.875rem;
+            color: var(--gray-600);
+        }
+
+        .import-help code {
+            display: block;
+            margin-top: 8px;
+            padding: 8px;
+            background: var(--white);
+            border-radius: var(--radius-sm);
+            font-family: monospace;
+            white-space: pre-line;
+            direction: ltr;
+            text-align: left;
+        }
+
+        .import-count {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 0.875rem;
+            color: var(--gray-500);
         }
 
         /* Alert */
@@ -851,6 +959,16 @@
         ::-webkit-scrollbar-thumb:hover {
             background: var(--gray-400);
         }
+
+        /* Draggable Marker Styles */
+        .leaflet-marker-draggable {
+            cursor: move !important;
+        }
+
+        .marker-dragging {
+            opacity: 0.8;
+            transform: scale(1.2);
+        }
     </style>
 </head>
 <body>
@@ -886,6 +1004,11 @@
                         <span class="icon">📦</span>
                         כתובות משלוחים
                     </div>
+                    
+                    <!-- Bulk Import Button -->
+                    <button class="import-btn" id="bulk-import-btn">
+                        📋 ייבוא מהיר (העתק/הדבק)
+                    </button>
                     
                     <div id="addresses-container">
                         <!-- Address cards will be added here -->
@@ -953,6 +1076,7 @@
                 <!-- Map -->
                 <div class="map-container">
                     <div id="map"></div>
+                    <div class="map-drag-hint">💡 גרור סמן לתיקון מיקום</div>
                 </div>
 
                 <!-- Start Address Display -->
@@ -1006,6 +1130,25 @@
             </div>
         </div>
 
+        <!-- Bulk Import Modal -->
+        <div class="modal-overlay" id="import-modal">
+            <div class="modal modal-large">
+                <h3 class="modal-title">📋 ייבוא מהיר</h3>
+                <div class="import-help">
+                    הדבק רשימת כתובות - כתובת אחת בכל שורה:
+                    <code>רחוב הרצל 5 בית שמש
+רחוב ויצמן 10 בית שמש
+רחוב בן גוריון 3 בית שמש</code>
+                </div>
+                <textarea class="form-textarea" id="import-textarea" placeholder="הדבק כתובות כאן..."></textarea>
+                <div class="import-count" id="import-count">0 כתובות</div>
+                <div class="modal-actions" style="margin-top: 16px;">
+                    <button class="btn btn-outline" id="import-cancel">ביטול</button>
+                    <button class="btn btn-primary" id="import-confirm">ייבא כתובות</button>
+                </div>
+            </div>
+        </div>
+
         <!-- History Detail Modal -->
         <div class="modal-overlay" id="history-modal">
             <div class="modal">
@@ -1023,6 +1166,11 @@
         <div class="undo-toast" id="undo-toast" style="display: none;">
             <span>משלוח סומן כבוצע</span>
             <button class="undo-btn" id="undo-btn">בטל</button>
+        </div>
+
+        <!-- Location Correction Toast -->
+        <div class="undo-toast" id="correction-toast" style="display: none;">
+            <span>📍 מיקום תוקן ונשמר</span>
         </div>
     </div>
 
