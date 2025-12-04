@@ -68,7 +68,11 @@
 
         body {
             font-family: 'Heebo', sans-serif;
-            background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
+            /* Set custom background image and remove old gradient */
+            background-image: url('background.png');
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
             min-height: 100vh;
             color: var(--gray-800);
             overflow-x: hidden;
