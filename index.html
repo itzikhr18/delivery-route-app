@@ -6,7 +6,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="מסלול משלוחים">
-    <meta name="theme-color" content="#252440">
+    <meta name="theme-color" content="#1a1a2e">
     <meta name="description" content="אפליקציית אופטימיזציה למסלולי משלוחים">
     
     <title>מסלול משלוחים</title>
@@ -27,9 +27,9 @@
     
     <style>
         :root {
-            --primary: #6c5dd3;
-            --primary-dark: #5845c4;
-            --secondary: #8e72b8;
+            --primary: #4361ee;
+            --primary-dark: #3651d4;
+            --secondary: #7209b7;
             --success: #06d6a0;
             --success-dark: #05b588;
             --warning: #ffd166;
@@ -37,8 +37,8 @@
             --danger-dark: #dc3545;
             --waze: #33ccff;
             --waze-dark: #00b8f0;
-            --dark: #252440;
-            --dark-light: #3b356b;
+            --dark: #1a1a2e;
+            --dark-light: #16213e;
             --gray-100: #f8f9fa;
             --gray-200: #e9ecef;
             --gray-300: #dee2e6;
@@ -68,11 +68,7 @@
 
         body {
             font-family: 'Heebo', sans-serif;
-            /* Set custom background image and remove old gradient */
-            background-image: url('background.png');
-            background-size: cover;
-            background-position: center;
-            background-repeat: no-repeat;
+            background: linear-gradient(135deg, var(--dark) 0%, var(--dark-light) 100%);
             min-height: 100vh;
             color: var(--gray-800);
             overflow-x: hidden;

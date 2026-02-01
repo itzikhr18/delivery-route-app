@@ -289,7 +289,8 @@ function saveState() {
         startAddress: state.startAddress,
         addresses: state.addresses,
         optimizedRoute: state.optimizedRoute,
-        lastViewedIndex: state.lastViewedIndex
+        lastViewedIndex: state.lastViewedIndex,
+        currentScreen: state.currentScreen
     };
     localStorage.setItem('deliveryRouteState', JSON.stringify(dataToSave));
 }
@@ -303,6 +304,7 @@ function loadState() {
             state.addresses = data.addresses || [];
             state.optimizedRoute = data.optimizedRoute || null;
             state.lastViewedIndex = data.lastViewedIndex || 0;
+            state.currentScreen = data.currentScreen || 'input';
         } catch (e) {
             console.error('Error loading state:', e);
         }
@@ -385,12 +387,28 @@ async function geocodeAddress(address, useCache = true) {
     const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchAddress)}&format=json&limit=1`;
     
     try {
+        // בדוק חיבור אינטרנט
+        if (!navigator.onLine) {
+            throw new Error('NO_INTERNET');
+        }
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // timeout 15 שניות
+        
         const response = await fetch(url, {
             headers: {
                 'Accept-Language': 'he',
-                'User-Agent': 'DeliveryRouteApp/3.0'
-            }
+                'User-Agent': 'DeliveryRouteApp/3.1'
+            },
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP_ERROR_${response.status}`);
+        }
+        
         const data = await response.json();
         
         if (data && data.length > 0) {
@@ -406,7 +424,13 @@ async function geocodeAddress(address, useCache = true) {
         return null;
     } catch (error) {
         console.error('Geocoding error:', error);
-        return null;
+        
+        // סמן את סוג השגיאה
+        if (error.message === 'NO_INTERNET' || error.name === 'AbortError' || !navigator.onLine) {
+            error.isNetworkError = true;
+        }
+        
+        throw error; // העבר את השגיאה הלאה לטיפול
     }
 }
 
@@ -445,13 +469,20 @@ async function geocodeAddressesWithDelay(addresses, onProgress) {
             await delay(1100);
         }
         
-        const geo = await geocodeAddress(addr.address, false);
-        fetchedCount++;
-        
-        if (geo) {
-            results.push({ ...addr, coords: geo });
-        } else {
-            return { error: addr.address, results: null };
+        try {
+            const geo = await geocodeAddress(addr.address, false);
+            fetchedCount++;
+            
+            if (geo) {
+                results.push({ ...addr, coords: geo });
+            } else {
+                return { error: addr.address, results: null, errorType: 'NOT_FOUND' };
+            }
+        } catch (error) {
+            if (error.isNetworkError || !navigator.onLine) {
+                return { error: addr.address, results: null, errorType: 'NETWORK_ERROR' };
+            }
+            return { error: addr.address, results: null, errorType: 'UNKNOWN_ERROR' };
         }
         
         if (onProgress) onProgress(i + 1, addresses.length, cachedCount);
@@ -625,7 +656,7 @@ function renderRouteAddresses() {
             </div>
             <div class="route-address-actions">
                 ${address.phone ? `<a href="tel:${address.phone}" class="btn btn-phone btn-sm">📞 ${address.phone}</a>` : ''}
-                <button class="btn btn-waze btn-sm navigate-btn" data-address="${encodeURIComponent(address.address)}">🧭 Waze</button>
+                <button class="btn btn-waze btn-sm navigate-btn" data-address="${encodeURIComponent(address.address)}" data-index="${index}">🧭 Waze</button>
                 <button class="btn btn-success btn-sm complete-btn" data-index="${index}">✓ בוצע</button>
             </div>
         `;
@@ -991,7 +1022,18 @@ async function handleCalculateRoute() {
         );
         
         if (geocodeResult.error) {
-            alert(`לא הצלחנו למצוא את הכתובת: ${geocodeResult.error}. אנא בדוק את הכתובת ונסה שוב.`);
+            let errorMessage;
+            switch (geocodeResult.errorType) {
+                case 'NETWORK_ERROR':
+                    errorMessage = 'אין חיבור לאינטרנט. בדוק את החיבור ונסה שוב.';
+                    break;
+                case 'NOT_FOUND':
+                    errorMessage = `לא הצלחנו למצוא את הכתובת: ${geocodeResult.error}. אנא בדוק את הכתובת ונסה שוב.`;
+                    break;
+                default:
+                    errorMessage = `שגיאה בעיבוד הכתובת: ${geocodeResult.error}. אנא נסה שוב.`;
+            }
+            alert(errorMessage);
             showLoading(false);
             return;
         }
@@ -1049,7 +1091,15 @@ async function handleCalculateRoute() {
         
     } catch (error) {
         console.error('Error calculating route:', error);
-        alert('משהו השתבש. אנא נסה שוב.');
+        
+        let errorMessage = 'משהו השתבש. אנא נסה שוב.';
+        if (!navigator.onLine) {
+            errorMessage = 'אין חיבור לאינטרנט. בדוק את החיבור ונסה שוב.';
+        } else if (error.message && error.message.includes('Failed to fetch')) {
+            errorMessage = 'בעיית תקשורת. בדוק את החיבור לאינטרנט ונסה שוב.';
+        }
+        
+        alert(errorMessage);
     }
     
     showLoading(false);
@@ -1057,8 +1107,35 @@ async function handleCalculateRoute() {
 
 function handleNavigate(e) {
     const address = decodeURIComponent(e.target.dataset.address);
-    const wazeUrl = `waze://?q=${encodeURIComponent(address)}`;
+    const index = parseInt(e.target.dataset.index);
+    
+    // נסה לקבל קואורדינטות אם יש
+    let lat, lon;
+    if (state.optimizedRoute && state.optimizedRoute.addresses[index] && state.optimizedRoute.addresses[index].coords) {
+        lat = state.optimizedRoute.addresses[index].coords.lat;
+        lon = state.optimizedRoute.addresses[index].coords.lon;
+    }
+    
+    // URL עם קואורדינטות (יותר מדויק)
+    const wazeUrl = lat && lon 
+        ? `waze://?ll=${lat},${lon}&navigate=yes`
+        : `waze://?q=${encodeURIComponent(address)}&navigate=yes`;
+    
+    const googleMapsUrl = lat && lon
+        ? `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}`
+        : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+    
+    // נסה Waze, אם לא עובד אחרי 1.5 שניות - פתח Google Maps
+    const startTime = Date.now();
     window.location.href = wazeUrl;
+    
+    // בדוק אם Waze נפתח (אם לא, הדף עדיין פה אחרי timeout)
+    setTimeout(() => {
+        // אם עברו פחות מ-2 שניות והדף עדיין פעיל, כנראה Waze לא מותקן
+        if (Date.now() - startTime < 2000 && document.visibilityState === 'visible') {
+            window.location.href = googleMapsUrl;
+        }
+    }, 1500);
 }
 
 function handleCompleteDelivery(e) {
@@ -1156,6 +1233,30 @@ function init() {
         renderRouteAddresses();
     }
     
+    // Restore the correct screen
+    if (state.currentScreen && state.currentScreen !== 'input') {
+        // Update nav buttons
+        elements.navBtns.forEach(btn => btn.classList.remove('active'));
+        const activeBtn = document.querySelector(`[data-screen="${state.currentScreen}"]`);
+        if (activeBtn) activeBtn.classList.add('active');
+        
+        // Update screens
+        document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+        
+        if (state.currentScreen === 'route' && state.optimizedRoute) {
+            elements.routeScreen.classList.add('active');
+            setTimeout(() => {
+                if (!state.map) initMap();
+                updateMap();
+            }, 100);
+        } else if (state.currentScreen === 'history') {
+            elements.historyScreen.classList.add('active');
+            renderHistory();
+        } else {
+            elements.inputScreen.classList.add('active');
+        }
+    }
+    
     // Event Listeners
     elements.navBtns.forEach(btn => {
         btn.addEventListener('click', handleNavigation);
@@ -1194,14 +1295,33 @@ function init() {
         if (e.target === elements.importModal) hideImportModal();
     });
     
+    // Auto-save when app goes to background (user switches apps)
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            saveState();
+            console.log('State saved (app went to background)');
+        }
+    });
+    
+    // Also save on page unload/refresh
+    window.addEventListener('beforeunload', () => {
+        saveState();
+    });
+    
+    // Save periodically (every 30 seconds) as backup
+    setInterval(() => {
+        saveState();
+    }, 30000);
+    
     // Add first address if none exist
     if (state.addresses.length === 0) {
         handleAddAddress();
     }
     
-    console.log('מסלול משלוחים v3.0 initialized');
+    console.log('מסלול משלוחים v3.1 initialized');
     console.log(`Cache: ${Object.keys(geocodeCache.data).length} addresses`);
     console.log(`Corrections: ${Object.keys(correctedLocations.data).length} locations`);
+    console.log(`Restored screen: ${state.currentScreen}`);
 }
 
 // Start the app
