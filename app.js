@@ -383,53 +383,82 @@ async function geocodeAddress(address, useCache = true) {
     }
     
     // 3. חפש ב-Nominatim
-    const searchAddress = address.includes('ישראל') ? address : `${address}, ישראל`;
-    const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchAddress)}&format=json&limit=1`;
-    
     try {
         // בדוק חיבור אינטרנט
         if (!navigator.onLine) {
             throw new Error('NO_INTERNET');
         }
-        
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000); // timeout 15 שניות
-        
-        const response = await fetch(url, {
+
+        const fetchOptions = {
             headers: {
                 'Accept-Language': 'he',
                 'User-Agent': 'DeliveryRouteApp/3.1'
             },
             signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
+        };
+
+        // ניסיון ראשון: חיפוש חופשי עם countrycodes
+        const searchAddress = address.includes('ישראל') ? address : `${address}, ישראל`;
+        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchAddress)}&format=json&limit=5&countrycodes=il`;
+
+        const response = await fetch(url, fetchOptions);
+
         if (!response.ok) {
             throw new Error(`HTTP_ERROR_${response.status}`);
         }
-        
-        const data = await response.json();
-        
+
+        let data = await response.json();
+
+        // ניסיון שני: חיפוש מובנה (structured) אם החיפוש החופשי לא מצא
+        if (!data || data.length === 0) {
+            console.log(`Free search failed for "${address}", trying structured search...`);
+            const structuredUrl = `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(address)}&country=Israel&format=json&limit=5`;
+
+            const response2 = await fetch(structuredUrl, fetchOptions);
+            if (response2.ok) {
+                data = await response2.json();
+            }
+        }
+
+        // ניסיון שלישי: חיפוש ללא הוספת "ישראל" עם countrycodes בלבד
+        if (!data || data.length === 0) {
+            console.log(`Structured search failed for "${address}", trying plain search with countrycodes...`);
+            const plainUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=5&countrycodes=il`;
+
+            const response3 = await fetch(plainUrl, fetchOptions);
+            if (response3.ok) {
+                data = await response3.json();
+            }
+        }
+
+        clearTimeout(timeoutId);
+
         if (data && data.length > 0) {
+            // העדף תוצאה מסוג place/city/village/town על פני כביש או בניין
+            const preferredTypes = ['city', 'town', 'village', 'hamlet', 'suburb', 'neighbourhood', 'residential'];
+            const bestMatch = data.find(r => preferredTypes.some(t => (r.type || '').includes(t) || (r.class || '') === 'place')) || data[0];
+
             const coords = {
-                lat: parseFloat(data[0].lat),
-                lon: parseFloat(data[0].lon),
-                displayName: data[0].display_name
+                lat: parseFloat(bestMatch.lat),
+                lon: parseFloat(bestMatch.lon),
+                displayName: bestMatch.display_name
             };
-            
+
             geocodeCache.set(address, coords);
             return coords;
         }
         return null;
     } catch (error) {
         console.error('Geocoding error:', error);
-        
+
         // סמן את סוג השגיאה
         if (error.message === 'NO_INTERNET' || error.name === 'AbortError' || !navigator.onLine) {
             error.isNetworkError = true;
         }
-        
+
         throw error; // העבר את השגיאה הלאה לטיפול
     }
 }
