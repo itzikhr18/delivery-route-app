@@ -534,11 +534,6 @@
             position: relative;
         }
 
-        .route-address-card.completed {
-            opacity: 0.5;
-            border-right-color: var(--success);
-        }
-
         .route-address-card.corrected {
             border-right-color: var(--warning);
         }
@@ -581,6 +576,45 @@
             margin-top: 4px;
         }
 
+        .route-address-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 24px;
+            padding: 3px 8px;
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+        .status-badge.status-pending {
+            background: rgba(67, 97, 238, 0.12);
+            color: var(--primary);
+        }
+
+        .status-badge.status-delivered {
+            background: rgba(6, 214, 160, 0.16);
+            color: var(--success-dark);
+        }
+
+        .status-badge.status-not-home {
+            background: rgba(255, 209, 102, 0.28);
+            color: var(--gray-800);
+        }
+
+        .status-badge.status-issue {
+            background: rgba(239, 71, 111, 0.12);
+            color: var(--danger);
+        }
+
         .corrected-badge {
             display: inline-block;
             background: var(--warning);
@@ -600,6 +634,57 @@
         .route-address-actions .btn {
             flex: 1;
             min-width: 0;
+        }
+
+        .status-actions {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .status-btn {
+            min-height: 38px;
+            padding: 8px 6px;
+            border: 1px solid var(--gray-300);
+            border-radius: var(--radius-sm);
+            background: var(--white);
+            color: var(--gray-700);
+            font-family: inherit;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .status-btn:hover {
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .status-btn.active {
+            background: var(--gray-800);
+            border-color: var(--gray-800);
+            color: var(--white);
+        }
+
+        .route-address-card.status-delivered {
+            border-right-color: var(--success);
+            background: linear-gradient(90deg, rgba(6, 214, 160, 0.08), var(--white) 28%);
+        }
+
+        .route-address-card.status-not-home {
+            border-right-color: var(--warning);
+        }
+
+        .route-address-card.status-issue {
+            border-right-color: var(--danger);
+        }
+
+        .data-actions {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
         }
 
         /* Undo Toast */
@@ -632,17 +717,6 @@
         @keyframes slideDown {
             from { transform: translateX(-50%) translateY(0); opacity: 1; }
             to { transform: translateX(-50%) translateY(100px); opacity: 0; }
-        }
-
-        .undo-toast .undo-btn {
-            background: var(--primary);
-            color: var(--white);
-            border: none;
-            padding: 8px 16px;
-            border-radius: var(--radius-sm);
-            font-family: inherit;
-            font-weight: 600;
-            cursor: pointer;
         }
 
         /* App Toast */
@@ -941,7 +1015,7 @@
                 max-width: 100%;
             }
             
-            .header, .header-nav, .btn, .map-container, .route-address-actions {
+            .header, .header-nav, .btn, .map-container, .route-address-actions, .status-actions {
                 display: none !important;
             }
             
@@ -980,7 +1054,7 @@
         /* Route Top Buttons */
         .route-top-buttons {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
             gap: 8px;
             margin-bottom: 16px;
         }
@@ -1082,6 +1156,23 @@
                         🗑️ נקה הכל
                     </button>
                 </div>
+
+                <!-- Data Tools -->
+                <div class="card" style="margin-top: 16px;">
+                    <div class="card-title">
+                        <span class="icon">💾</span>
+                        גיבוי ושחזור
+                    </div>
+                    <div class="data-actions">
+                        <button class="btn btn-outline" id="backup-data-btn">
+                            💾 גיבוי
+                        </button>
+                        <button class="btn btn-outline" id="restore-data-btn">
+                            ↩ שחזור
+                        </button>
+                    </div>
+                    <input type="file" id="restore-file-input" accept="application/json,.json" style="display: none;">
+                </div>
             </section>
 
             <!-- Route Screen -->
@@ -1096,7 +1187,7 @@
                 <div class="route-stats">
                     <div class="stat-card">
                         <span class="stat-value" id="stat-deliveries">0</span>
-                        <span class="stat-label">משלוחים</span>
+                        <span class="stat-label">נותרו</span>
                     </div>
                     <div class="stat-card">
                         <span class="stat-value" id="stat-distance">0</span>
@@ -1112,6 +1203,12 @@
                 <div class="route-top-buttons">
                     <button class="btn btn-outline btn-sm" id="print-route-btn">
                         🖨️ הדפס
+                    </button>
+                    <button class="btn btn-outline btn-sm" id="share-route-btn">
+                        📲 שתף
+                    </button>
+                    <button class="btn btn-outline btn-sm" id="export-route-btn">
+                        ⬇ ייצוא
                     </button>
                     <button class="btn btn-outline btn-sm" id="edit-route-btn">
                         ✏️ עריכה
@@ -1208,12 +1305,6 @@
                     <button class="btn btn-outline btn-block" id="history-modal-close">סגור</button>
                 </div>
             </div>
-        </div>
-
-        <!-- Undo Toast (hidden by default) -->
-        <div class="undo-toast" id="undo-toast" style="display: none;">
-            <span>משלוח סומן כבוצע</span>
-            <button class="undo-btn" id="undo-btn">בטל</button>
         </div>
 
         <!-- Location Correction Toast -->
