@@ -1,7 +1,16 @@
 // ============================================
 // מסלול משלוחים - Delivery Route Optimizer
-// גרסה 3.0 - Bulk Import, Pin Dragging, Smart Splitting
+// גרסה 3.5.0 - Bulk Import, Pin Dragging, Smart Splitting
 // ============================================
+
+const APP_VERSION = '3.5.0';
+const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+
+function debugLog(...args) {
+    if (DEBUG_MODE) {
+        console.log(...args);
+    }
+}
 
 // State Management
 const state = {
@@ -14,6 +23,8 @@ const state = {
     routeLine: null,
     lastViewedIndex: 0,
     undoTimeout: null,
+    toastTimeout: null,
+    toastHideTimeout: null,
     lastRemovedAddress: null
 };
 
@@ -167,6 +178,7 @@ const elements = {
     undoToast: document.getElementById('undo-toast'),
     undoBtn: document.getElementById('undo-btn'),
     correctionToast: document.getElementById('correction-toast'),
+    appToast: document.getElementById('app-toast'),
     
     // Navigation
     navBtns: document.querySelectorAll('.nav-btn')
@@ -247,6 +259,32 @@ function showDuplicateAlert() {
     setTimeout(() => {
         elements.duplicateAlert.style.display = 'none';
     }, 3000);
+}
+
+function showAppToast(message, type = 'info', duration = 3500) {
+    if (!elements.appToast) return;
+
+    if (state.toastTimeout) {
+        clearTimeout(state.toastTimeout);
+    }
+    if (state.toastHideTimeout) {
+        clearTimeout(state.toastHideTimeout);
+    }
+
+    elements.appToast.textContent = message;
+    elements.appToast.className = `app-toast app-toast-${type}`;
+    elements.appToast.style.display = 'flex';
+
+    requestAnimationFrame(() => {
+        elements.appToast.classList.add('active');
+    });
+
+    state.toastTimeout = setTimeout(() => {
+        elements.appToast.classList.remove('active');
+        state.toastHideTimeout = setTimeout(() => {
+            elements.appToast.style.display = 'none';
+        }, 250);
+    }, duration);
 }
 
 function showUndoToast(address, callback) {
@@ -364,7 +402,7 @@ async function geocodeAddress(address, useCache = true) {
     // 1. קודם בדוק תיקונים ידניים (עדיפות עליונה)
     const corrected = correctedLocations.get(address);
     if (corrected) {
-        console.log(`Using corrected location: ${address}`);
+        debugLog(`Using corrected location: ${address}`);
         return {
             lat: corrected.lat,
             lon: corrected.lon,
@@ -377,7 +415,7 @@ async function geocodeAddress(address, useCache = true) {
     if (useCache) {
         const cached = geocodeCache.get(address);
         if (cached) {
-            console.log(`Cache hit: ${address}`);
+            debugLog(`Cache hit: ${address}`);
             return cached;
         }
     }
@@ -398,7 +436,7 @@ async function geocodeAddress(address, useCache = true) {
         const fetchOptions = {
             headers: {
                 'Accept-Language': 'he',
-                'User-Agent': 'DeliveryRouteApp/3.2'
+                'User-Agent': `DeliveryRouteApp/${APP_VERSION}`
             },
             signal: controller.signal
         };
@@ -408,7 +446,7 @@ async function geocodeAddress(address, useCache = true) {
         let data = null;
 
         // ניסיון 1: חיפוש חופשי עם viewbox (ללא הוספת "ישראל" - countrycodes מספיק)
-        console.log(`Geocoding attempt 1 (free search): "${cleanAddress}"`);
+        debugLog(`Geocoding attempt 1 (free search): "${cleanAddress}"`);
         const url1 = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanAddress)}&${baseParams}&viewbox=${israelViewbox}&bounded=1`;
         const response1 = await fetch(url1, fetchOptions);
         if (response1.ok) {
@@ -417,7 +455,7 @@ async function geocodeAddress(address, useCache = true) {
 
         // ניסיון 2: חיפוש מובנה כעיר/ישוב
         if (!data || data.length === 0) {
-            console.log(`Geocoding attempt 2 (structured city): "${cleanAddress}"`);
+            debugLog(`Geocoding attempt 2 (structured city): "${cleanAddress}"`);
             const url2 = `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(cleanAddress)}&country=Israel&format=json&limit=5`;
             const response2 = await fetch(url2, fetchOptions);
             if (response2.ok) {
@@ -427,7 +465,7 @@ async function geocodeAddress(address, useCache = true) {
 
         // ניסיון 3: חיפוש מובנה כרחוב/מקום
         if (!data || data.length === 0) {
-            console.log(`Geocoding attempt 3 (structured street): "${cleanAddress}"`);
+            debugLog(`Geocoding attempt 3 (structured street): "${cleanAddress}"`);
             const url3 = `https://nominatim.openstreetmap.org/search?street=${encodeURIComponent(cleanAddress)}&country=Israel&format=json&limit=5`;
             const response3 = await fetch(url3, fetchOptions);
             if (response3.ok) {
@@ -437,7 +475,7 @@ async function geocodeAddress(address, useCache = true) {
 
         // ניסיון 4: חיפוש חופשי עם ", Israel" באנגלית (Nominatim לפעמים מגיב טוב יותר לאנגלית)
         if (!data || data.length === 0) {
-            console.log(`Geocoding attempt 4 (English country): "${cleanAddress}"`);
+            debugLog(`Geocoding attempt 4 (English country): "${cleanAddress}"`);
             const url4 = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanAddress + ', Israel')}&format=json&limit=5`;
             const response4 = await fetch(url4, fetchOptions);
             if (response4.ok) {
@@ -447,7 +485,7 @@ async function geocodeAddress(address, useCache = true) {
 
         // ניסיון 5: חיפוש חופשי ללא הגבלות גיאוגרפיות (מרחיב את החיפוש)
         if (!data || data.length === 0) {
-            console.log(`Geocoding attempt 5 (unrestricted): "${cleanAddress}"`);
+            debugLog(`Geocoding attempt 5 (unrestricted): "${cleanAddress}"`);
             const url5 = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cleanAddress)}&format=json&limit=5`;
             const response5 = await fetch(url5, fetchOptions);
             if (response5.ok) {
@@ -564,7 +602,7 @@ async function calculateOptimalRouteWithSplitting(startCoords, addressCoords) {
     }
     
     // חלק לקבוצות
-    console.log(`Splitting ${addressCoords.length} addresses into batches of ${BATCH_SIZE}`);
+    debugLog(`Splitting ${addressCoords.length} addresses into batches of ${BATCH_SIZE}`);
     
     const batches = [];
     for (let i = 0; i < addressCoords.length; i += BATCH_SIZE) {
@@ -580,7 +618,7 @@ async function calculateOptimalRouteWithSplitting(startCoords, addressCoords) {
     
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
-        console.log(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} addresses`);
+        debugLog(`Processing batch ${batchIndex + 1}/${batches.length} with ${batch.length} addresses`);
         
         const batchResult = await calculateSingleBatchRoute(currentStartCoords, batch);
         
@@ -896,7 +934,7 @@ function handleMarkerDragEnd(address, newLatLng, index) {
     showCorrectionToast();
     renderRouteAddresses();
     
-    console.log(`Location corrected: ${address} -> ${newLatLng.lat}, ${newLatLng.lng}`);
+    debugLog(`Location corrected: ${address} -> ${newLatLng.lat}, ${newLatLng.lng}`);
 }
 
 // ============================================
@@ -925,10 +963,12 @@ function handleBulkImport() {
     const lines = text.split('\n').filter(line => line.trim().length > 0);
     
     if (lines.length === 0) {
-        alert('לא הוזנו כתובות');
+        showAppToast('לא הוזנו כתובות', 'warning');
         return;
     }
-    
+
+    let addedCount = 0;
+
     // הוסף את הכתובות החדשות
     lines.forEach(line => {
         const address = line.trim();
@@ -943,6 +983,7 @@ function handleBulkImport() {
                 phone: '',
                 notes: ''
             });
+            addedCount++;
         }
     });
     
@@ -950,8 +991,11 @@ function handleBulkImport() {
     saveState();
     hideImportModal();
     
-    // הודעה למשתמש
-    alert(`יובאו ${lines.length} כתובות בהצלחה!`);
+    if (addedCount > 0) {
+        showAppToast(`יובאו ${addedCount} כתובות בהצלחה`, 'success');
+    } else {
+        showAppToast('כל הכתובות כבר קיימות ברשימה', 'warning');
+    }
 }
 
 // ============================================
@@ -1046,13 +1090,13 @@ function handleStartAddressChange() {
 
 async function handleCalculateRoute() {
     if (!state.startAddress.trim()) {
-        alert('נא להזין כתובת התחלה');
+        showAppToast('נא להזין כתובת התחלה', 'warning');
         return;
     }
     
     const validAddresses = state.addresses.filter(a => a.address.trim());
     if (validAddresses.length === 0) {
-        alert('נא להוסיף לפחות כתובת משלוח אחת');
+        showAppToast('נא להוסיף לפחות כתובת משלוח אחת', 'warning');
         return;
     }
     
@@ -1068,7 +1112,7 @@ async function handleCalculateRoute() {
         }
         
         if (!startGeo) {
-            alert(`לא הצלחנו למצוא את הכתובת: ${state.startAddress}. אנא בדוק את הכתובת ונסה שוב.`);
+            showAppToast(`לא הצלחנו למצוא את הכתובת: ${state.startAddress}. אנא בדוק את הכתובת ונסה שוב.`, 'error', 5000);
             showLoading(false);
             return;
         }
@@ -1091,13 +1135,13 @@ async function handleCalculateRoute() {
                 default:
                     errorMessage = `שגיאה בעיבוד הכתובת: ${geocodeResult.error}. אנא נסה שוב.`;
             }
-            alert(errorMessage);
+            showAppToast(errorMessage, 'error', 5000);
             showLoading(false);
             return;
         }
         
         const geocodedAddresses = geocodeResult.results;
-        console.log(`Geocoding complete: ${geocodeResult.cachedCount} from cache, ${geocodeResult.fetchedCount} fetched`);
+        debugLog(`Geocoding complete: ${geocodeResult.cachedCount} from cache, ${geocodeResult.fetchedCount} fetched`);
         
         showLoading(true, 'מחשב מסלול אופטימלי...');
         
@@ -1106,7 +1150,7 @@ async function handleCalculateRoute() {
         const routeResult = await calculateOptimalRouteWithSplitting(startGeo, coordsForRouting);
         
         if (!routeResult) {
-            alert('שגיאה בחישוב המסלול. אנא נסה שוב.');
+            showAppToast('שגיאה בחישוב המסלול. אנא נסה שוב.', 'error', 5000);
             showLoading(false);
             return;
         }
@@ -1146,7 +1190,9 @@ async function handleCalculateRoute() {
             if (!state.map) initMap();
             updateMap();
         }, 100);
-        
+
+        showAppToast(`המסלול חושב עבור ${orderedAddresses.length} משלוחים`, 'success');
+
     } catch (error) {
         console.error('Error calculating route:', error);
         
@@ -1156,8 +1202,7 @@ async function handleCalculateRoute() {
         } else if (error.message && error.message.includes('Failed to fetch')) {
             errorMessage = 'בעיית תקשורת. בדוק את החיבור לאינטרנט ונסה שוב.';
         }
-        
-        alert(errorMessage);
+        showAppToast(errorMessage, 'error', 5000);
     }
     
     showLoading(false);
@@ -1357,7 +1402,7 @@ function init() {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') {
             saveState();
-            console.log('State saved (app went to background)');
+            debugLog('State saved (app went to background)');
         }
     });
     
@@ -1376,10 +1421,10 @@ function init() {
         handleAddAddress();
     }
     
-    console.log('מסלול משלוחים v3.1 initialized');
-    console.log(`Cache: ${Object.keys(geocodeCache.data).length} addresses`);
-    console.log(`Corrections: ${Object.keys(correctedLocations.data).length} locations`);
-    console.log(`Restored screen: ${state.currentScreen}`);
+    debugLog(`מסלול משלוחים v${APP_VERSION} initialized`);
+    debugLog(`Cache: ${Object.keys(geocodeCache.data).length} addresses`);
+    debugLog(`Corrections: ${Object.keys(correctedLocations.data).length} locations`);
+    debugLog(`Restored screen: ${state.currentScreen}`);
 }
 
 // Start the app
@@ -1389,7 +1434,7 @@ document.addEventListener('DOMContentLoaded', init);
 if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
         navigator.serviceWorker.register('sw.js')
-            .then(registration => console.log('ServiceWorker registered'))
-            .catch(err => console.log('ServiceWorker failed:', err));
+            .then(() => debugLog('ServiceWorker registered'))
+            .catch(err => debugLog('ServiceWorker failed:', err));
     });
 }
