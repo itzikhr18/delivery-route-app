@@ -645,6 +645,54 @@
             cursor: pointer;
         }
 
+        /* App Toast */
+        .app-toast {
+            position: fixed;
+            right: 50%;
+            bottom: 24px;
+            transform: translateX(50%) translateY(16px);
+            width: calc(100% - 40px);
+            max-width: 420px;
+            min-height: 48px;
+            padding: 12px 18px;
+            border-radius: var(--radius-md);
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            font-size: 0.9375rem;
+            font-weight: 600;
+            box-shadow: var(--shadow-xl);
+            z-index: 2100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.25s ease, transform 0.25s ease;
+        }
+
+        .app-toast.active {
+            opacity: 1;
+            transform: translateX(50%) translateY(0);
+        }
+
+        .app-toast-info {
+            background: var(--gray-800);
+            color: var(--white);
+        }
+
+        .app-toast-success {
+            background: var(--success-dark);
+            color: var(--white);
+        }
+
+        .app-toast-warning {
+            background: var(--warning);
+            color: var(--gray-800);
+        }
+
+        .app-toast-error {
+            background: var(--danger);
+            color: var(--white);
+        }
+
         /* History Screen */
         .history-day-card {
             background: var(--white);
@@ -1172,6 +1220,9 @@
         <div class="undo-toast" id="correction-toast" style="display: none;">
             <span>📍 מיקום תוקן ונשמר</span>
         </div>
+
+        <!-- App Toast -->
+        <div class="app-toast app-toast-info" id="app-toast" role="status" aria-live="polite" style="display: none;"></div>
     </div>
 
     <!-- Leaflet JS -->

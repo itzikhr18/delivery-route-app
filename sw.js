@@ -1,10 +1,19 @@
 // Service Worker for מסלול משלוחים PWA
-const CACHE_NAME = 'delivery-route-v3.4';
+const CACHE_NAME = 'delivery-route-v3.5.0';
 const urlsToCache = [
     './',
     'index.html',
     'app.js',
     'manifest.json',
+    'background.png',
+    'icons/icon-72.png',
+    'icons/icon-96.png',
+    'icons/icon-128.png',
+    'icons/icon-144.png',
+    'icons/icon-152.png',
+    'icons/icon-192.png',
+    'icons/icon-384.png',
+    'icons/icon-512.png',
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
     'https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap'
@@ -15,11 +24,10 @@ self.addEventListener('install', event => {
     event.waitUntil(
         caches.open(CACHE_NAME)
             .then(cache => {
-                console.log('Opened cache');
                 return cache.addAll(urlsToCache);
             })
             .catch(err => {
-                console.log('Cache install error:', err);
+                console.warn('Cache install error:', err);
             })
     );
     self.skipWaiting();
@@ -32,7 +40,6 @@ self.addEventListener('activate', event => {
             return Promise.all(
                 cacheNames.map(cacheName => {
                     if (cacheName !== CACHE_NAME) {
-                        console.log('Deleting old cache:', cacheName);
                         return caches.delete(cacheName);
                     }
                 })
