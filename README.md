@@ -23,6 +23,12 @@
 npm start
 ```
 
+ב־PowerShell ב־Windows ייתכן שצריך להריץ:
+
+```bash
+npm.cmd start
+```
+
 לאחר מכן לפתוח בדפדפן:
 
 ```text
