@@ -1,10 +1,42 @@
 // ============================================
 // מסלול משלוחים - Delivery Route Optimizer
-// גרסה 3.5.0 - Bulk Import, Pin Dragging, Smart Splitting
+// גרסה 3.6.0 - Delivery statuses, Sharing, Export, Backup
 // ============================================
 
-const APP_VERSION = '3.5.0';
+const APP_VERSION = '3.6.0';
+const BACKUP_SCHEMA_VERSION = 1;
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+
+const DELIVERY_STATUSES = {
+    pending: {
+        label: 'ממתין',
+        icon: '⏳',
+        cardClass: 'status-pending',
+        markerColor: 'linear-gradient(135deg, var(--primary), var(--secondary))',
+        markerTextColor: 'white'
+    },
+    delivered: {
+        label: 'נמסר',
+        icon: '✓',
+        cardClass: 'status-delivered',
+        markerColor: 'var(--success)',
+        markerTextColor: 'white'
+    },
+    not_home: {
+        label: 'לא בבית',
+        icon: '⌂',
+        cardClass: 'status-not-home',
+        markerColor: 'var(--warning)',
+        markerTextColor: 'var(--gray-800)'
+    },
+    issue: {
+        label: 'בעיה',
+        icon: '!',
+        cardClass: 'status-issue',
+        markerColor: 'var(--danger)',
+        markerTextColor: 'white'
+    }
+};
 
 function debugLog(...args) {
     if (DEBUG_MODE) {
@@ -22,10 +54,8 @@ const state = {
     markers: [],
     routeLine: null,
     lastViewedIndex: 0,
-    undoTimeout: null,
     toastTimeout: null,
-    toastHideTimeout: null,
-    lastRemovedAddress: null
+    toastHideTimeout: null
 };
 
 // ============================================
@@ -145,6 +175,8 @@ const elements = {
     routeStartText: document.getElementById('route-start-text'),
     routeAddressesContainer: document.getElementById('route-addresses-container'),
     printRouteBtn: document.getElementById('print-route-btn'),
+    shareRouteBtn: document.getElementById('share-route-btn'),
+    exportRouteBtn: document.getElementById('export-route-btn'),
     editRouteBtn: document.getElementById('edit-route-btn'),
     newDayBtn: document.getElementById('new-day-btn'),
     printDate: document.getElementById('print-date'),
@@ -173,10 +205,11 @@ const elements = {
     importCount: document.getElementById('import-count'),
     importConfirm: document.getElementById('import-confirm'),
     importCancel: document.getElementById('import-cancel'),
+    backupDataBtn: document.getElementById('backup-data-btn'),
+    restoreDataBtn: document.getElementById('restore-data-btn'),
+    restoreFileInput: document.getElementById('restore-file-input'),
     
     // Toasts
-    undoToast: document.getElementById('undo-toast'),
-    undoBtn: document.getElementById('undo-btn'),
     correctionToast: document.getElementById('correction-toast'),
     appToast: document.getElementById('app-toast'),
     
@@ -207,6 +240,150 @@ function formatDate(date) {
         month: '2-digit',
         year: 'numeric'
     });
+}
+
+function escapeHtml(value = '') {
+    return String(value).replace(/[&<>"']/g, char => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    }[char]));
+}
+
+function getDeliveryStatus(statusKey) {
+    return DELIVERY_STATUSES[statusKey] || DELIVERY_STATUSES.pending;
+}
+
+function getDeliveryStatusKey(address) {
+    if (!address) return 'pending';
+    if (address.completed && !address.status) return 'delivered';
+    return DELIVERY_STATUSES[address.status] ? address.status : 'pending';
+}
+
+function normalizeRouteAddress(address) {
+    const status = getDeliveryStatusKey(address);
+    return {
+        ...address,
+        status,
+        statusUpdatedAt: address.statusUpdatedAt || null
+    };
+}
+
+function normalizeRoute(route) {
+    if (!route || !Array.isArray(route.addresses)) return route || null;
+    return {
+        ...route,
+        addresses: route.addresses.map(normalizeRouteAddress)
+    };
+}
+
+function getRouteStatusCounts(route = state.optimizedRoute) {
+    const counts = {
+        total: 0,
+        pending: 0,
+        delivered: 0,
+        not_home: 0,
+        issue: 0
+    };
+
+    if (!route || !Array.isArray(route.addresses)) {
+        return counts;
+    }
+
+    route.addresses.forEach(address => {
+        const status = getDeliveryStatusKey(address);
+        counts.total++;
+        counts[status] = (counts[status] || 0) + 1;
+    });
+
+    return counts;
+}
+
+function updateRouteStats() {
+    const counts = getRouteStatusCounts();
+    const remaining = counts.pending + counts.issue;
+    elements.statDeliveries.textContent = state.optimizedRoute ? remaining : 0;
+
+    if (state.optimizedRoute) {
+        elements.statDistance.textContent = state.optimizedRoute.totalDistance.toFixed(1);
+        elements.statTime.textContent = Math.round(state.optimizedRoute.totalTime);
+        elements.routeStartText.textContent = state.optimizedRoute.startAddress;
+    } else {
+        elements.statDistance.textContent = '0';
+        elements.statTime.textContent = '0';
+        elements.routeStartText.textContent = '';
+    }
+}
+
+function formatDeliveryLine(address, index) {
+    const statusKey = getDeliveryStatusKey(address);
+    const status = getDeliveryStatus(statusKey);
+    const phone = address.phone ? ` | טלפון: ${address.phone}` : '';
+    const notes = address.notes ? ` | הערות: ${address.notes}` : '';
+    return `${index + 1}. ${status.icon} ${status.label} - ${address.address}${phone}${notes}`;
+}
+
+function buildRouteText(route = state.optimizedRoute) {
+    if (!route || !Array.isArray(route.addresses) || route.addresses.length === 0) {
+        return '';
+    }
+
+    const counts = getRouteStatusCounts(route);
+    const lines = [
+        `מסלול משלוחים - ${formatDate(route.calculatedAt || new Date())}`,
+        `נקודת התחלה: ${route.startAddress}`,
+        `סה"כ: ${counts.total} משלוחים | נותרו: ${counts.pending + counts.issue} | נמסרו: ${counts.delivered} | לא בבית: ${counts.not_home}`,
+        `מרחק: ${route.totalDistance.toFixed(1)} ק"מ | זמן משוער: ${Math.round(route.totalTime)} דקות`,
+        ''
+    ];
+
+    route.addresses.forEach((address, index) => {
+        lines.push(formatDeliveryLine(address, index));
+    });
+
+    return lines.join('\n');
+}
+
+function escapeCsvValue(value = '') {
+    const text = String(value).replace(/\r?\n/g, ' ');
+    return `"${text.replace(/"/g, '""')}"`;
+}
+
+function buildRouteCsv(route = state.optimizedRoute) {
+    const rows = [
+        ['סדר', 'סטטוס', 'כתובת', 'טלפון', 'הערות', 'קו רוחב', 'קו אורך']
+    ];
+
+    if (route && Array.isArray(route.addresses)) {
+        route.addresses.forEach((address, index) => {
+            const status = getDeliveryStatus(getDeliveryStatusKey(address));
+            rows.push([
+                index + 1,
+                status.label,
+                address.address || '',
+                address.phone || '',
+                address.notes || '',
+                address.coords ? address.coords.lat : '',
+                address.coords ? address.coords.lon : ''
+            ]);
+        });
+    }
+
+    return rows.map(row => row.map(escapeCsvValue).join(',')).join('\n');
+}
+
+function downloadTextFile(filename, content, type = 'text/plain;charset=utf-8') {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
 }
 
 function showLoading(show, text = 'מחשב מסלול אופטימלי...', progress = null) {
@@ -240,18 +417,17 @@ function showConfirmModal(title, text, onConfirm) {
     elements.modalTitle.textContent = title;
     elements.modalText.textContent = text;
     elements.confirmModal.classList.add('active');
-    
-    const confirmHandler = () => {
+
+    elements.modalConfirm.onclick = () => {
         elements.confirmModal.classList.remove('active');
-        elements.modalConfirm.removeEventListener('click', confirmHandler);
+        elements.modalConfirm.onclick = null;
         onConfirm();
     };
-    
-    elements.modalConfirm.addEventListener('click', confirmHandler);
 }
 
 function hideConfirmModal() {
     elements.confirmModal.classList.remove('active');
+    elements.modalConfirm.onclick = null;
 }
 
 function showDuplicateAlert() {
@@ -287,26 +463,6 @@ function showAppToast(message, type = 'info', duration = 3500) {
     }, duration);
 }
 
-function showUndoToast(address, callback) {
-    if (state.undoTimeout) {
-        clearTimeout(state.undoTimeout);
-    }
-    
-    state.lastRemovedAddress = address;
-    elements.undoToast.style.display = 'flex';
-    
-    state.undoTimeout = setTimeout(() => {
-        elements.undoToast.style.display = 'none';
-        state.lastRemovedAddress = null;
-    }, 5000);
-    
-    elements.undoBtn.onclick = () => {
-        clearTimeout(state.undoTimeout);
-        elements.undoToast.style.display = 'none';
-        if (callback) callback();
-    };
-}
-
 function showCorrectionToast() {
     elements.correctionToast.style.display = 'flex';
     setTimeout(() => {
@@ -340,7 +496,7 @@ function loadState() {
             const data = JSON.parse(saved);
             state.startAddress = data.startAddress || '';
             state.addresses = data.addresses || [];
-            state.optimizedRoute = data.optimizedRoute || null;
+            state.optimizedRoute = normalizeRoute(data.optimizedRoute);
             state.lastViewedIndex = data.lastViewedIndex || 0;
             state.currentScreen = data.currentScreen || 'input';
         } catch (e) {
@@ -366,8 +522,11 @@ function getHistory() {
 }
 
 function saveToHistory(routeData) {
+    if (!routeData || !Array.isArray(routeData.addresses)) return;
+
     const history = getHistory();
     const today = new Date().toISOString().split('T')[0];
+    const counts = getRouteStatusCounts(routeData);
     
     const existingIndex = history.findIndex(h => h.date === today);
     
@@ -375,13 +534,16 @@ function saveToHistory(routeData) {
         date: today,
         totalKm: routeData.totalDistance,
         deliveryCount: routeData.addresses.length,
+        statusCounts: counts,
         totalTime: routeData.totalTime,
         startAddress: routeData.startAddress,
         addresses: routeData.addresses.map((addr, index) => ({
             order: index + 1,
             address: addr.address,
             phone: addr.phone,
-            notes: addr.notes
+            notes: addr.notes,
+            status: getDeliveryStatusKey(addr),
+            statusUpdatedAt: addr.statusUpdatedAt || null
         }))
     };
     
@@ -704,9 +866,9 @@ function renderAddressCard(address, index) {
         <span class="address-number">${index + 1}</span>
         <button class="delete-btn" data-index="${index}">×</button>
         <div class="address-fields">
-            <input type="text" class="form-input address-input" placeholder="כתובת *" value="${address.address || ''}" data-index="${index}" data-field="address">
-            <input type="tel" class="form-input phone-input" placeholder="מספר טלפון" value="${address.phone || ''}" data-index="${index}" data-field="phone" dir="ltr">
-            <input type="text" class="form-input notes-input" placeholder="הערות" value="${address.notes || ''}" data-index="${index}" data-field="notes">
+            <input type="text" class="form-input address-input" placeholder="כתובת *" value="${escapeHtml(address.address || '')}" data-index="${index}" data-field="address">
+            <input type="tel" class="form-input phone-input" placeholder="מספר טלפון" value="${escapeHtml(address.phone || '')}" data-index="${index}" data-field="phone" dir="ltr">
+            <input type="text" class="form-input notes-input" placeholder="הערות" value="${escapeHtml(address.notes || '')}" data-index="${index}" data-field="notes">
         </div>
     `;
     return card;
@@ -736,24 +898,34 @@ function renderRouteAddresses() {
     if (!state.optimizedRoute || !state.optimizedRoute.addresses) return;
     
     state.optimizedRoute.addresses.forEach((address, index) => {
+        const statusKey = getDeliveryStatusKey(address);
+        const status = getDeliveryStatus(statusKey);
         const isCorrected = address.isCorrected || correctedLocations.get(address.address);
         const card = document.createElement('div');
-        card.className = `route-address-card ${address.completed ? 'completed' : ''} ${isCorrected ? 'corrected' : ''}`;
+        card.className = `route-address-card ${status.cardClass} ${isCorrected ? 'corrected' : ''}`;
         card.innerHTML = `
             <div class="route-address-header">
                 <div class="route-number">${index + 1}</div>
                 <div class="route-address-info">
-                    <div class="route-address-text">
+                    <div class="route-address-meta">
+                        <span class="status-badge ${status.cardClass}">${status.icon} ${status.label}</span>
                         ${isCorrected ? '<span class="corrected-badge">📍 מתוקן</span>' : ''}
-                        ${address.address}
                     </div>
-                    ${address.notes ? `<div class="route-address-notes">📝 ${address.notes}</div>` : ''}
+                    <div class="route-address-text">
+                        ${escapeHtml(address.address)}
+                    </div>
+                    ${address.notes ? `<div class="route-address-notes">📝 ${escapeHtml(address.notes)}</div>` : ''}
                 </div>
             </div>
             <div class="route-address-actions">
-                ${address.phone ? `<a href="tel:${address.phone}" class="btn btn-phone btn-sm">📞 ${address.phone}</a>` : ''}
+                ${address.phone ? `<a href="tel:${escapeHtml(address.phone)}" class="btn btn-phone btn-sm">📞 ${escapeHtml(address.phone)}</a>` : ''}
                 <button class="btn btn-waze btn-sm navigate-btn" data-address="${encodeURIComponent(address.address)}" data-index="${index}">🧭 Waze</button>
-                <button class="btn btn-success btn-sm complete-btn" data-index="${index}">✓ בוצע</button>
+            </div>
+            <div class="status-actions" aria-label="עדכון סטטוס משלוח">
+                <button class="status-btn ${statusKey === 'pending' ? 'active' : ''}" data-index="${index}" data-status="pending">⏳ ממתין</button>
+                <button class="status-btn ${statusKey === 'delivered' ? 'active' : ''}" data-index="${index}" data-status="delivered">✓ נמסר</button>
+                <button class="status-btn ${statusKey === 'not_home' ? 'active' : ''}" data-index="${index}" data-status="not_home">⌂ לא בבית</button>
+                <button class="status-btn ${statusKey === 'issue' ? 'active' : ''}" data-index="${index}" data-status="issue">! בעיה</button>
             </div>
         `;
         elements.routeAddressesContainer.appendChild(card);
@@ -763,8 +935,8 @@ function renderRouteAddresses() {
         btn.addEventListener('click', handleNavigate);
     });
     
-    document.querySelectorAll('.complete-btn').forEach(btn => {
-        btn.addEventListener('click', handleCompleteDelivery);
+    document.querySelectorAll('.status-btn').forEach(btn => {
+        btn.addEventListener('click', handleSetDeliveryStatus);
     });
 }
 
@@ -786,6 +958,7 @@ function renderHistory() {
     history.forEach((day) => {
         const card = document.createElement('div');
         card.className = 'history-day-card';
+        const counts = day.statusCounts || getRouteStatusCounts({ addresses: day.addresses || [] });
         card.innerHTML = `
             <div class="history-day-header">
                 <span class="history-date">${formatDate(day.date)}</span>
@@ -793,6 +966,7 @@ function renderHistory() {
             </div>
             <div class="history-stats">
                 <span>📦 ${day.deliveryCount} משלוחים</span>
+                <span>✓ ${counts.delivered || 0} נמסרו</span>
                 <span>🛣️ ${day.totalKm.toFixed(1)} ק"מ</span>
             </div>
         `;
@@ -806,7 +980,7 @@ function showHistoryDetail(day) {
     
     let content = `
         <div style="margin-bottom: 16px; padding: 12px; background: var(--gray-100); border-radius: var(--radius-md);">
-            <strong>נקודת התחלה:</strong> ${day.startAddress || 'לא צוין'}
+            <strong>נקודת התחלה:</strong> ${escapeHtml(day.startAddress || 'לא צוין')}
         </div>
         <div style="margin-bottom: 12px; font-size: 0.875rem; color: var(--gray-500);">
             סה"כ: ${day.deliveryCount} משלוחים | ${day.totalKm.toFixed(1)} ק"מ | ${Math.round(day.totalTime)} דקות
@@ -814,11 +988,13 @@ function showHistoryDetail(day) {
     `;
     
     day.addresses.forEach(addr => {
+        const status = getDeliveryStatus(getDeliveryStatusKey(addr));
         content += `
             <div style="padding: 12px; background: var(--white); border-radius: var(--radius-sm); margin-bottom: 8px; border-right: 3px solid var(--primary);">
-                <div style="font-weight: 600;">${addr.order}. ${addr.address}</div>
-                ${addr.phone ? `<div style="font-size: 0.875rem; color: var(--gray-500); margin-top: 4px;">📞 ${addr.phone}</div>` : ''}
-                ${addr.notes ? `<div style="font-size: 0.875rem; color: var(--gray-500); margin-top: 4px;">📝 ${addr.notes}</div>` : ''}
+                <div style="margin-bottom: 6px;"><span class="status-badge ${status.cardClass}">${status.icon} ${status.label}</span></div>
+                <div style="font-weight: 600;">${addr.order}. ${escapeHtml(addr.address)}</div>
+                ${addr.phone ? `<div style="font-size: 0.875rem; color: var(--gray-500); margin-top: 4px;">📞 ${escapeHtml(addr.phone)}</div>` : ''}
+                ${addr.notes ? `<div style="font-size: 0.875rem; color: var(--gray-500); margin-top: 4px;">📝 ${escapeHtml(addr.notes)}</div>` : ''}
             </div>
         `;
     });
@@ -869,20 +1045,23 @@ function updateMap() {
     // Add address markers (draggable!)
     state.optimizedRoute.addresses.forEach((addr, index) => {
         if (addr.coords) {
+            const status = getDeliveryStatus(getDeliveryStatusKey(addr));
             const isCorrected = addr.isCorrected || correctedLocations.get(addr.address);
-            const markerColor = isCorrected ? 'var(--warning)' : 'linear-gradient(135deg, var(--primary), var(--secondary))';
+            const markerColor = status.markerColor;
+            const markerTextColor = status.markerTextColor;
+            const markerBorder = isCorrected ? '2px solid var(--warning)' : 'none';
             
             const marker = L.marker([addr.coords.lat, addr.coords.lon], {
                 draggable: true, // ניתן לגרירה!
                 icon: L.divIcon({
                     className: 'custom-marker leaflet-marker-draggable',
-                    html: `<div style="background: ${markerColor}; color: ${isCorrected ? 'var(--gray-800)' : 'white'}; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); cursor: move;">${index + 1}</div>`,
+                    html: `<div style="background: ${markerColor}; color: ${markerTextColor}; border: ${markerBorder}; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.3); cursor: move;">${index + 1}</div>`,
                     iconSize: [32, 32],
                     iconAnchor: [16, 16]
                 })
             }).addTo(state.map);
             
-            marker.bindPopup(`<strong>${index + 1}. ${addr.address}</strong><br><small>גרור לתיקון מיקום</small>`);
+            marker.bindPopup(`<strong>${index + 1}. ${escapeHtml(addr.address)}</strong><br><small>${status.icon} ${status.label} | גרור לתיקון מיקום</small>`);
             
             // Event: סיום גרירה
             marker.on('dragend', function(e) {
@@ -1156,7 +1335,11 @@ async function handleCalculateRoute() {
         }
         
         // Reorder addresses
-        const orderedAddresses = routeResult.orderedIndices.map(i => geocodedAddresses[i]);
+        const orderedAddresses = routeResult.orderedIndices.map(i => normalizeRouteAddress({
+            ...geocodedAddresses[i],
+            status: 'pending',
+            statusUpdatedAt: null
+        }));
         
         state.optimizedRoute = {
             startAddress: state.startAddress,
@@ -1172,10 +1355,7 @@ async function handleCalculateRoute() {
         saveToHistory(state.optimizedRoute);
         
         // Update UI
-        elements.statDeliveries.textContent = orderedAddresses.length;
-        elements.statDistance.textContent = routeResult.distance.toFixed(1);
-        elements.statTime.textContent = Math.round(routeResult.duration);
-        elements.routeStartText.textContent = state.startAddress;
+        updateRouteStats();
         elements.printDate.textContent = formatDate(new Date());
         
         renderRouteAddresses();
@@ -1241,31 +1421,172 @@ function handleNavigate(e) {
     }, 1500);
 }
 
-function handleCompleteDelivery(e) {
-    const index = parseInt(e.target.dataset.index);
-    
-    showConfirmModal(
-        'סיום משלוח',
-        'האם סיימת משלוח זה?',
-        () => {
-            const removedAddress = state.optimizedRoute.addresses[index];
-            state.optimizedRoute.addresses.splice(index, 1);
-            
-            elements.statDeliveries.textContent = state.optimizedRoute.addresses.length;
-            
-            renderRouteAddresses();
-            updateMap();
-            saveState();
-            
-            showUndoToast(removedAddress, () => {
-                state.optimizedRoute.addresses.splice(index, 0, removedAddress);
-                elements.statDeliveries.textContent = state.optimizedRoute.addresses.length;
-                renderRouteAddresses();
-                updateMap();
-                saveState();
-            });
+function setDeliveryStatus(index, statusKey) {
+    if (!state.optimizedRoute || !state.optimizedRoute.addresses[index]) return;
+
+    const address = state.optimizedRoute.addresses[index];
+    const currentStatus = getDeliveryStatusKey(address);
+    const nextStatus = currentStatus === statusKey && statusKey !== 'pending' ? 'pending' : statusKey;
+    const status = getDeliveryStatus(nextStatus);
+
+    address.status = nextStatus;
+    address.statusUpdatedAt = new Date().toISOString();
+    address.completed = nextStatus === 'delivered';
+
+    updateRouteStats();
+    renderRouteAddresses();
+    updateMap();
+    saveState();
+    saveToHistory(state.optimizedRoute);
+
+    showAppToast(`${address.address}: ${status.label}`, nextStatus === 'issue' ? 'warning' : 'success');
+}
+
+function handleSetDeliveryStatus(e) {
+    const index = parseInt(e.currentTarget.dataset.index);
+    const status = e.currentTarget.dataset.status;
+    setDeliveryStatus(index, status);
+}
+
+function handleShareRoute() {
+    const text = buildRouteText();
+
+    if (!text) {
+        showAppToast('אין מסלול לשיתוף', 'warning');
+        return;
+    }
+
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    const opened = window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+
+    if (!opened) {
+        window.location.href = whatsappUrl;
+    }
+}
+
+function handleExportRoute() {
+    if (!state.optimizedRoute || !Array.isArray(state.optimizedRoute.addresses) || state.optimizedRoute.addresses.length === 0) {
+        showAppToast('אין מסלול לייצוא', 'warning');
+        return;
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    downloadTextFile(`delivery-route-${today}.csv`, `\ufeff${buildRouteCsv()}`, 'text/csv;charset=utf-8');
+    showAppToast('קובץ המסלול ירד למחשב', 'success');
+}
+
+function buildBackupData() {
+    return {
+        schemaVersion: BACKUP_SCHEMA_VERSION,
+        appVersion: APP_VERSION,
+        exportedAt: new Date().toISOString(),
+        data: {
+            deliveryRouteState: {
+                startAddress: state.startAddress,
+                addresses: state.addresses,
+                optimizedRoute: normalizeRoute(state.optimizedRoute),
+                lastViewedIndex: state.lastViewedIndex,
+                currentScreen: state.currentScreen
+            },
+            deliveryRouteHistory: getHistory(),
+            geocodeCache: geocodeCache.data,
+            correctedLocations: correctedLocations.data
         }
-    );
+    };
+}
+
+function handleBackupData() {
+    const today = new Date().toISOString().split('T')[0];
+    const backup = JSON.stringify(buildBackupData(), null, 2);
+    downloadTextFile(`delivery-route-backup-${today}.json`, backup, 'application/json;charset=utf-8');
+    showAppToast('קובץ גיבוי ירד למחשב', 'success');
+}
+
+function applyBackupData(backup) {
+    if (!backup || !backup.data || !backup.data.deliveryRouteState) {
+        throw new Error('INVALID_BACKUP');
+    }
+
+    const backupState = backup.data.deliveryRouteState;
+
+    state.startAddress = backupState.startAddress || '';
+    state.addresses = Array.isArray(backupState.addresses) ? backupState.addresses : [];
+    state.optimizedRoute = normalizeRoute(backupState.optimizedRoute);
+    state.lastViewedIndex = backupState.lastViewedIndex || 0;
+    state.currentScreen = backupState.currentScreen || 'input';
+
+    geocodeCache.data = backup.data.geocodeCache || {};
+    correctedLocations.data = backup.data.correctedLocations || {};
+
+    localStorage.setItem('deliveryRouteState', JSON.stringify({
+        startAddress: state.startAddress,
+        addresses: state.addresses,
+        optimizedRoute: state.optimizedRoute,
+        lastViewedIndex: state.lastViewedIndex,
+        currentScreen: state.currentScreen
+    }));
+    localStorage.setItem('deliveryRouteHistory', JSON.stringify(backup.data.deliveryRouteHistory || []));
+    geocodeCache.save();
+    correctedLocations.save();
+
+    elements.startAddressInput.value = state.startAddress;
+    renderAddresses();
+    renderRouteAddresses();
+    renderHistory();
+    updateRouteStats();
+
+    const screenToShow = state.currentScreen === 'route' && !state.optimizedRoute ? 'input' : state.currentScreen;
+    elements.navBtns.forEach(btn => btn.classList.toggle('active', btn.dataset.screen === screenToShow));
+    document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+
+    if (screenToShow === 'route') {
+        elements.routeScreen.classList.add('active');
+        setTimeout(() => {
+            if (!state.map) initMap();
+            updateMap();
+        }, 100);
+    } else if (screenToShow === 'history') {
+        elements.historyScreen.classList.add('active');
+        renderHistory();
+    } else {
+        elements.inputScreen.classList.add('active');
+    }
+
+    if (state.map) {
+        updateMap();
+    }
+}
+
+function handleRestoreBackup(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+        try {
+            const backup = JSON.parse(reader.result);
+            showConfirmModal(
+                'שחזור מגיבוי',
+                'שחזור הגיבוי יחליף את הנתונים המקומיים באפליקציה. להמשיך?',
+                () => {
+                    applyBackupData(backup);
+                    showAppToast('הגיבוי שוחזר בהצלחה', 'success');
+                }
+            );
+        } catch (error) {
+            showAppToast('קובץ הגיבוי לא תקין', 'error');
+        } finally {
+            elements.restoreFileInput.value = '';
+        }
+    };
+
+    reader.onerror = () => {
+        showAppToast('לא הצלחנו לקרוא את קובץ הגיבוי', 'error');
+        elements.restoreFileInput.value = '';
+    };
+
+    reader.readAsText(file);
 }
 
 function handleClearAll() {
@@ -1292,6 +1613,7 @@ function handleNewDay() {
             state.optimizedRoute = null;
             elements.startAddressInput.value = '';
             renderAddresses();
+            updateRouteStats();
             saveState();
             
             elements.navBtns.forEach(btn => btn.classList.remove('active'));
@@ -1329,10 +1651,7 @@ function init() {
     
     // If we have an optimized route, render it
     if (state.optimizedRoute && state.optimizedRoute.addresses && state.optimizedRoute.addresses.length > 0) {
-        elements.statDeliveries.textContent = state.optimizedRoute.addresses.length;
-        elements.statDistance.textContent = state.optimizedRoute.totalDistance.toFixed(1);
-        elements.statTime.textContent = Math.round(state.optimizedRoute.totalTime);
-        elements.routeStartText.textContent = state.optimizedRoute.startAddress;
+        updateRouteStats();
         renderRouteAddresses();
     }
     
@@ -1370,6 +1689,8 @@ function init() {
     elements.calculateRouteBtn.addEventListener('click', handleCalculateRoute);
     elements.clearAllBtn.addEventListener('click', handleClearAll);
     elements.printRouteBtn.addEventListener('click', handlePrintRoute);
+    elements.shareRouteBtn.addEventListener('click', handleShareRoute);
+    elements.exportRouteBtn.addEventListener('click', handleExportRoute);
     elements.editRouteBtn.addEventListener('click', handleEditRoute);
     elements.newDayBtn.addEventListener('click', handleNewDay);
     elements.modalCancel.addEventListener('click', hideConfirmModal);
@@ -1382,6 +1703,9 @@ function init() {
     elements.importCancel.addEventListener('click', hideImportModal);
     elements.importConfirm.addEventListener('click', handleBulkImport);
     elements.importTextarea.addEventListener('input', updateImportCount);
+    elements.backupDataBtn.addEventListener('click', handleBackupData);
+    elements.restoreDataBtn.addEventListener('click', () => elements.restoreFileInput.click());
+    elements.restoreFileInput.addEventListener('change', handleRestoreBackup);
     
     // Close modals on overlay click
     elements.confirmModal.addEventListener('click', (e) => {

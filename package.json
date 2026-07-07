@@ -1,6 +1,6 @@
 {
   "name": "delivery-route-app",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "private": true,
   "description": "Hebrew PWA for planning delivery routes.",
   "scripts": {

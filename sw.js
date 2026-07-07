@@ -1,5 +1,5 @@
 // Service Worker for מסלול משלוחים PWA
-const CACHE_NAME = 'delivery-route-v3.5.0';
+const CACHE_NAME = 'delivery-route-v3.6.0';
 const urlsToCache = [
     './',
     'index.html',
