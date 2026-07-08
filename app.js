@@ -1,11 +1,20 @@
 // ============================================
 // מסלול משלוחים - Delivery Route Optimizer
-// גרסה 3.6.0 - Delivery statuses, Sharing, Export, Backup
+// גרסה 3.7.0 - Backend API foundation
 // ============================================
 
-const APP_VERSION = '3.6.0';
+const APP_VERSION = '3.7.0';
 const BACKUP_SCHEMA_VERSION = 1;
 const DEBUG_MODE = new URLSearchParams(window.location.search).has('debug');
+const DEFAULT_APP_CONFIG = {
+    apiBaseUrl: '',
+    directFallback: true,
+    requestTimeoutMs: 30000
+};
+const APP_CONFIG = {
+    ...DEFAULT_APP_CONFIG,
+    ...(window.DELIVERY_ROUTE_CONFIG || {})
+};
 
 const DELIVERY_STATUSES = {
     pending: {
@@ -41,6 +50,121 @@ const DELIVERY_STATUSES = {
 function debugLog(...args) {
     if (DEBUG_MODE) {
         console.log(...args);
+    }
+}
+
+function getApiBaseUrl() {
+    return String(APP_CONFIG.apiBaseUrl || '').trim().replace(/\/+$/, '');
+}
+
+function isBackendApiEnabled() {
+    return getApiBaseUrl().length > 0;
+}
+
+function shouldFallbackToDirectApis() {
+    return APP_CONFIG.directFallback !== false;
+}
+
+function buildApiUrl(path) {
+    return `${getApiBaseUrl()}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
+async function fetchBackendJson(path, payload) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), Number(APP_CONFIG.requestTimeoutMs) || 30000);
+
+    try {
+        const response = await fetch(buildApiUrl(path), {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+
+        let data = null;
+        try {
+            data = await response.json();
+        } catch (error) {
+            data = null;
+        }
+
+        if (!response.ok) {
+            const message = data && data.error ? data.error : `Backend request failed (${response.status})`;
+            const error = new Error(message);
+            error.status = response.status;
+            error.details = data;
+            throw error;
+        }
+
+        return data;
+    } finally {
+        clearTimeout(timeoutId);
+    }
+}
+
+async function geocodeAddressViaBackend(address) {
+    if (!isBackendApiEnabled()) {
+        return { handled: false, result: null };
+    }
+
+    try {
+        const data = await fetchBackendJson('/api/geocode', { address });
+        if (!data || !data.coords) {
+            return { handled: true, result: null };
+        }
+
+        return {
+            handled: true,
+            result: {
+                lat: Number(data.coords.lat),
+                lon: Number(data.coords.lon),
+                displayName: data.coords.displayName || address,
+                provider: data.provider || data.coords.provider || 'backend'
+            }
+        };
+    } catch (error) {
+        console.warn('Backend geocoding failed:', error);
+        if (shouldFallbackToDirectApis()) {
+            return { handled: false, result: null };
+        }
+        throw error;
+    }
+}
+
+function normalizeBackendRoute(route) {
+    if (!route || !Array.isArray(route.orderedIndices)) {
+        return null;
+    }
+
+    return {
+        distance: Number(route.distance) || 0,
+        duration: Number(route.duration) || 0,
+        geometry: route.geometry || null,
+        orderedIndices: route.orderedIndices.map(index => Number(index)).filter(index => Number.isInteger(index))
+    };
+}
+
+async function calculateRouteViaBackend(startCoords, addressCoords) {
+    if (!isBackendApiEnabled()) {
+        return { handled: false, result: null };
+    }
+
+    try {
+        const data = await fetchBackendJson('/api/optimize-route', {
+            startCoords,
+            addressCoords
+        });
+        const route = normalizeBackendRoute(data && (data.route || data));
+        return { handled: true, result: route };
+    } catch (error) {
+        console.warn('Backend route optimization failed:', error);
+        if (shouldFallbackToDirectApis()) {
+            return { handled: false, result: null };
+        }
+        throw error;
     }
 }
 
@@ -581,6 +705,14 @@ async function geocodeAddress(address, useCache = true) {
             return cached;
         }
     }
+
+    const backendGeocode = await geocodeAddressViaBackend(address);
+    if (backendGeocode.handled) {
+        if (backendGeocode.result) {
+            geocodeCache.set(address, backendGeocode.result);
+        }
+        return backendGeocode.result;
+    }
     
     // 3. חפש ב-Nominatim
     try {
@@ -757,6 +889,11 @@ const BATCH_SIZE = 40; // מקסימום נקודות לכל בקשת OSRM
 
 async function calculateOptimalRouteWithSplitting(startCoords, addressCoords) {
     if (addressCoords.length === 0) return null;
+
+    const backendRoute = await calculateRouteViaBackend(startCoords, addressCoords);
+    if (backendRoute.handled) {
+        return backendRoute.result;
+    }
     
     // אם פחות מ-BATCH_SIZE, חשב רגיל
     if (addressCoords.length <= BATCH_SIZE) {
@@ -1746,6 +1883,7 @@ function init() {
     }
     
     debugLog(`מסלול משלוחים v${APP_VERSION} initialized`);
+    debugLog(`Backend API: ${isBackendApiEnabled() ? getApiBaseUrl() : 'disabled'}`);
     debugLog(`Cache: ${Object.keys(geocodeCache.data).length} addresses`);
     debugLog(`Corrections: ${Object.keys(correctedLocations.data).length} locations`);
     debugLog(`Restored screen: ${state.currentScreen}`);

@@ -1,8 +1,9 @@
 // Service Worker for מסלול משלוחים PWA
-const CACHE_NAME = 'delivery-route-v3.6.0';
+const CACHE_NAME = 'delivery-route-v3.7.0';
 const urlsToCache = [
     './',
     'index.html',
+    'config.js',
     'app.js',
     'manifest.json',
     'background.png',
@@ -53,6 +54,11 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
     // Skip non-GET requests
     if (event.request.method !== 'GET') return;
+
+    const requestUrl = new URL(event.request.url);
+    if (requestUrl.pathname.startsWith('/api/')) {
+        return event.respondWith(fetch(event.request));
+    }
     
     // Skip API requests (we want these to be fresh)
     if (event.request.url.includes('nominatim.openstreetmap.org') ||

@@ -1,10 +1,11 @@
 {
   "name": "delivery-route-app",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "private": true,
   "description": "Hebrew PWA for planning delivery routes.",
   "scripts": {
     "start": "node dev-server.js",
-    "check": "node --check app.js && node --check sw.js && node --check dev-server.js"
+    "api": "node api-server.js",
+    "check": "node --check app.js && node --check config.js && node --check sw.js && node --check dev-server.js && node --check api-server.js"
   }
 }
